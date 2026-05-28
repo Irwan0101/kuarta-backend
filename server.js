@@ -66,7 +66,7 @@ app.use((err, req, res, next) => {
 });
 
 // ─── START ─────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`
   ╔═══════════════════════════════════════╗
   ║     KUARTA BIMBEL API — v1.0.0        ║
@@ -74,5 +74,4 @@ app.listen(PORT, () => {
   ║  Env: ${(process.env.NODE_ENV || 'development').padEnd(10)}                   ║
   ╚═══════════════════════════════════════╝`);
 });
-
 export default app;
