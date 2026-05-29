@@ -1,0 +1,16 @@
+[package]
+name = "apikuarta/kuarta-backend" # Ganti dengan username Wasmer kamu
+version = "0.1.0"
+description = "Backend Express manual"
+
+[[commands]]
+name = "start"
+runner = "wasmer/winterjs:0.1"
+source = "server.js" # Ganti dengan nama file utama Express kamu (misal: index.js atau server.js)
+
+[app]
+env = ["DATABASE_URL"]
+
+[[fs]]
+local = "."
+mount = "/"
