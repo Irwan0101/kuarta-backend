@@ -66,12 +66,14 @@ app.use((err, req, res, next) => {
 });
 
 // ─── START ─────────────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`
   ╔═══════════════════════════════════════╗
   ║     KUARTA BIMBEL API — v1.0.0        ║
   ║  Server: http://localhost:${PORT}         ║
-  ║  Env: ${(process.env.NODE_ENV || 'development').padEnd(10)}                   ║
+  ║  Env: ${(process.env.NODE_ENV || 'development').padEnd(10)}                    ║
   ╚═══════════════════════════════════════╝`);
-});
+  });
+}
 export default app;
