@@ -202,16 +202,24 @@ const migrations = [
     is_read       BOOLEAN DEFAULT false,
     created_at    TIMESTAMPTZ DEFAULT NOW()
   )`,
+ `CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id         SERIAL PRIMARY KEY,
+  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token      VARCHAR(64) NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+)`,
 
-  // ─── INDEXES ──────────────────────────────────────────────────
-  `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
-  `CREATE INDEX IF NOT EXISTS idx_user_programs_user ON user_programs(user_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_lesson_progress_user ON lesson_progress(user_id, program_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_tryout_results_user ON tryout_results(user_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_tryout_results_score ON tryout_results(total_score DESC)`,
-  `CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_transactions_order ON transactions(order_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_questions_tryout ON questions(tryout_id, order_index)`,
+// ─── INDEXES ──────────────────────────────────────────────────
+`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
+`CREATE INDEX IF NOT EXISTS idx_user_programs_user ON user_programs(user_id)`,
+`CREATE INDEX IF NOT EXISTS idx_lesson_progress_user ON lesson_progress(user_id, program_id)`,
+`CREATE INDEX IF NOT EXISTS idx_tryout_results_user ON tryout_results(user_id)`,
+`CREATE INDEX IF NOT EXISTS idx_tryout_results_score ON tryout_results(total_score DESC)`,
+`CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)`,
+`CREATE INDEX IF NOT EXISTS idx_transactions_order ON transactions(order_id)`,
+`CREATE INDEX IF NOT EXISTS idx_questions_tryout ON questions(tryout_id, order_index)`,
+`CREATE INDEX IF NOT EXISTS idx_prt_token ON password_reset_tokens(token)`,
 
   // ─── UPDATED_AT TRIGGER ───────────────────────────────────────
   `CREATE OR REPLACE FUNCTION update_updated_at()
