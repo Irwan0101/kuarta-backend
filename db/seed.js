@@ -1,7 +1,7 @@
 // 🌟 PERBAIKAN UTAMA: Muat file .env di baris paling atas agar password database terbaca!
 import dotenv from 'dotenv';
 dotenv.config();
-console.log("Cek Password DB:", process.env.DB_PASSWORD);
+console.log("DB configured:", !!process.env.DATABASE_URL);
 import { query } from './pool.js';
 import bcrypt from 'bcryptjs';
 
@@ -21,10 +21,20 @@ async function seed() {
   // Mentor
   const mentorHash = await bcrypt.hash('Mentor@123', 12);
   const mentorRes = await query(`
-    INSERT INTO users (name, email, phone, password_hash, role, plan, city, bio, email_verified)
-    VALUES ($1,$2,$3,$4,'mentor','vip',$5,$6,true) RETURNING id`,
+    INSERT INTO users (name, email, phone, password_hash, role, plan, city, bio, email_verified,
+                       specialization, photo_url, schedule)
+    VALUES ($1,$2,$3,$4,'mentor','vip',$5,$6,true,
+            $7,$8,$9::jsonb)
+    ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name RETURNING id`,
     ['Rizal Saputra, S.Pd.', 'rizal@kuarta.id', '+6281200000002', mentorHash.toString(),
-     'Bandung', 'Mentor TIU & Matematika. 5 tahun pengalaman']
+     'Bandung', 'Mentor TIU & Matematika. 5 tahun pengalaman',
+     '{TIU,Matematika,CPNS}',
+     'https://ui-avatars.com/api/?name=Rizal+Saputra&background=FF6B00&color=fff&size=200',
+     JSON.stringify([
+       { day: 'Senin', start: '09:00', end: '15:00' },
+       { day: 'Rabu', start: '09:00', end: '15:00' },
+       { day: 'Jumat', start: '13:00', end: '17:00' },
+     ])]
   );
 
   // Demo user
@@ -32,8 +42,9 @@ async function seed() {
   const userRes = await query(`
     INSERT INTO users (name, email, phone, password_hash, role, plan, plan_expires_at, city, bio,
                         streak_count, reward_points, target_exam, email_verified)
-    VALUES ($1,$2,$3,$4,'user','premium',NOW()+INTERVAL '9 months',$5,$6,14,2840,$7,true) RETURNING id`,
-    ['Andi Saputra', 'andi@email.com', '+6281234567890', userHash.toString(),
+     VALUES ($1,$2,$3,$4,'user','premium',NOW()+INTERVAL '9 months',$5,$6,14,2840,$7,true)
+     ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name, password_hash=EXCLUDED.password_hash RETURNING id`,
+     ['Andi Saputra', 'andi@email.com', '+6281234567890', userHash.toString(),
      'Palembang', 'Pejuang ASN dari Palembang 💪', 'SKD CPNS 2026 — Formasi Umum']
   );
   const userId = userRes.rows[0]?.id;
@@ -55,9 +66,11 @@ async function seed() {
     const r = await query(`
       INSERT INTO programs (slug,name,category,price,duration_months,icon,bg_gradient,
                             badge_label,badge_type,video_count,pdf_count,tryout_count,
-                            is_active,rating,review_count,student_count)
+                            is_active,rating,review_count,student_count,
+                            pricing_type,session_price,session_count)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,true,4.8+random()*0.2,
-              (200+floor(random()*5000))::int,(500+floor(random()*10000))::int)
+              (200+floor(random()*5000))::int,(500+floor(random()*10000))::int,
+              'bundle',null,0)
       ON CONFLICT (slug) DO UPDATE SET price=EXCLUDED.price RETURNING id`,
       [p.slug,p.name,p.category,p.price,p.duration,p.icon,p.bg,
        p.badge||null,p.btype||null,p.video||0,p.pdf||0,p.tryout||0]
@@ -113,7 +126,7 @@ async function seed() {
         VALUES
           ($1,$2,150,175,127,452,true,NOW()-INTERVAL '3 days'),
           ($1,$3,145,168,125,438,true,NOW()-INTERVAL '10 days')
-        ON CONFLICT (user_id, tryout_id) DO NOTHING`,
+        ON CONFLICT DO NOTHING`,
         [userId, toRes.rows[0].id, toRes.rows[1].id]
       );
     }

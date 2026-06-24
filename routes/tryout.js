@@ -157,6 +157,26 @@ router.get('/results/history', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/tryout/results/by-tryout/:tryoutId
+router.get('/results/by-tryout/:tryoutId', authenticate, async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT tr.*, tp.title as tryout_title, tp.passing_score,
+             tp.duration_mins, p.name as program_name
+      FROM tryout_results tr
+      JOIN tryout_packages tp ON tp.id=tr.tryout_id
+      JOIN programs p ON p.id=tp.program_id
+      WHERE tr.user_id=$1 AND tr.tryout_id=$2
+      ORDER BY tr.created_at DESC LIMIT 1`,
+      [req.user.id, req.params.tryoutId]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Hasil tryout tidak ditemukan' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal mengambil hasil tryout' });
+  }
+});
+
 // GET /api/tryout/leaderboard
 router.get('/leaderboard/global', async (req, res) => {
   try {

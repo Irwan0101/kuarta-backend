@@ -20,6 +20,9 @@ const migrations = [
     target_exam   VARCHAR(100),
     is_active     BOOLEAN DEFAULT true,
     email_verified BOOLEAN DEFAULT false,
+    email_verify_token VARCHAR(64),
+    token_version INT DEFAULT 0,
+    last_login_at TIMESTAMPTZ,
     created_at    TIMESTAMPTZ DEFAULT NOW(),
     updated_at    TIMESTAMPTZ DEFAULT NOW()
   )`,
@@ -51,7 +54,7 @@ const migrations = [
     updated_at    TIMESTAMPTZ DEFAULT NOW()
   )`,
 
-  // ─── MODULES (Chapters) ──────────────────────────────────────
+  // ─── MODULES ─────────────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS modules (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     program_id    UUID REFERENCES programs(id) ON DELETE CASCADE,
@@ -77,7 +80,7 @@ const migrations = [
     created_at    TIMESTAMPTZ DEFAULT NOW()
   )`,
 
-  // ─── USER PROGRAMS (Enrollments) ─────────────────────────────
+  // ─── USER PROGRAMS ───────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS user_programs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id       UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -115,7 +118,7 @@ const migrations = [
     created_at    TIMESTAMPTZ DEFAULT NOW()
   )`,
 
-  // ─── QUESTIONS ───────────────────────────────────────────────
+  // ─── QUESTIONS ──────────────────────────────────────────────
   `CREATE TABLE IF NOT EXISTS questions (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tryout_id     UUID REFERENCES tryout_packages(id) ON DELETE CASCADE,
@@ -202,24 +205,94 @@ const migrations = [
     is_read       BOOLEAN DEFAULT false,
     created_at    TIMESTAMPTZ DEFAULT NOW()
   )`,
- `CREATE TABLE IF NOT EXISTS password_reset_tokens (
-  id         SERIAL PRIMARY KEY,
-  user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  token      VARCHAR(64) NOT NULL UNIQUE,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-)`,
 
-// ─── INDEXES ──────────────────────────────────────────────────
-`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
-`CREATE INDEX IF NOT EXISTS idx_user_programs_user ON user_programs(user_id)`,
-`CREATE INDEX IF NOT EXISTS idx_lesson_progress_user ON lesson_progress(user_id, program_id)`,
-`CREATE INDEX IF NOT EXISTS idx_tryout_results_user ON tryout_results(user_id)`,
-`CREATE INDEX IF NOT EXISTS idx_tryout_results_score ON tryout_results(total_score DESC)`,
-`CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)`,
-`CREATE INDEX IF NOT EXISTS idx_transactions_order ON transactions(order_id)`,
-`CREATE INDEX IF NOT EXISTS idx_questions_tryout ON questions(tryout_id, order_index)`,
-`CREATE INDEX IF NOT EXISTS idx_prt_token ON password_reset_tokens(token)`,
+  `CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id            SERIAL PRIMARY KEY,
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token         VARCHAR(64) NOT NULL UNIQUE,
+    expires_at    TIMESTAMPTZ NOT NULL,
+    attempt_count INT DEFAULT 0,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  // ─── ADD COLUMNS IF MISSING (must be before indexes) ──────────
+  `DO $$ BEGIN
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INT DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS discount BIGINT DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS items JSONB;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token VARCHAR(64);
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE password_reset_tokens ADD COLUMN IF NOT EXISTS attempt_count INT DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id VARCHAR(200) UNIQUE;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE programs ADD COLUMN IF NOT EXISTS pricing_type VARCHAR(20) DEFAULT 'bundle' CHECK (pricing_type IN ('bundle', 'session'));
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE programs ADD COLUMN IF NOT EXISTS session_price BIGINT;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE programs ADD COLUMN IF NOT EXISTS session_count INT DEFAULT 0;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+  EXCEPTION WHEN OTHERS THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS specialization TEXT[];
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS schedule JSONB DEFAULT '[]'::jsonb;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  // ─── INDEXES ──────────────────────────────────────────────────
+  `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)`,
+  `CREATE INDEX IF NOT EXISTS idx_users_verify_token ON users(email_verify_token) WHERE email_verify_token IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_user_programs_user ON user_programs(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_user_programs_program ON user_programs(program_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_lesson_progress_user ON lesson_progress(user_id, program_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_tryout_results_user ON tryout_results(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_tryout_results_score ON tryout_results(total_score DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_tryout_results_tryout ON tryout_results(tryout_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_transactions_order ON transactions(order_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_transactions_program ON transactions(program_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_transactions_status ON transactions(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_questions_tryout ON questions(tryout_id, order_index)`,
+  `CREATE INDEX IF NOT EXISTS idx_questions_program ON questions(program_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_modules_program ON modules(program_id, order_index)`,
+  `CREATE INDEX IF NOT EXISTS idx_lessons_module ON lessons(module_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_lessons_program ON lessons(program_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_live_scheduled ON live_classes(scheduled_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_prt_token ON password_reset_tokens(token)`,
 
   // ─── UPDATED_AT TRIGGER ───────────────────────────────────────
   `CREATE OR REPLACE FUNCTION update_updated_at()
@@ -233,13 +306,201 @@ const migrations = [
   EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
 
   `DO $$ BEGIN
+    CREATE TRIGGER trg_programs_updated BEFORE UPDATE ON programs
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+  EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+
+  `DO $$ BEGIN
     CREATE TRIGGER trg_transactions_updated BEFORE UPDATE ON transactions
       FOR EACH ROW EXECUTE FUNCTION update_updated_at();
   EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    CREATE TRIGGER trg_notifications_updated BEFORE UPDATE ON notifications
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+  EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
+
+  // ─── FORUM THREADS ──────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS forum_threads (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    program_id    UUID NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    title         VARCHAR(200) NOT NULL,
+    content       TEXT NOT NULL,
+    is_pinned     BOOLEAN DEFAULT false,
+    is_closed     BOOLEAN DEFAULT false,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  `CREATE TABLE IF NOT EXISTS forum_replies (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    thread_id     UUID NOT NULL REFERENCES forum_threads(id) ON DELETE CASCADE,
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    content       TEXT NOT NULL,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  // ─── MENTORING SESSIONS ─────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS mentoring_sessions (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mentor_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    program_id    UUID REFERENCES programs(id) ON DELETE SET NULL,
+    scheduled_at  TIMESTAMPTZ NOT NULL,
+    topic         VARCHAR(200),
+    status        VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending','confirmed','completed','cancelled')),
+    notes         TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  // ─── PROGRAM REVIEWS ────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS program_reviews (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    program_id    UUID NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+    rating        INT NOT NULL CHECK (rating >= 1 AND rating <= 5),
+    review        TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, program_id)
+  )`,
+
+  // ─── FREE TRIAL TRACKING ────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS free_trials (
+    id            SERIAL PRIMARY KEY,
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    program_id    UUID NOT NULL REFERENCES programs(id) ON DELETE CASCADE,
+    used_at       TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE(user_id, program_id)
+  )`,
+
+  // ─── LANDING PAGE BANNERS ─────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS landing_banners (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    image_url     TEXT,
+    title         VARCHAR(200) NOT NULL,
+    subtitle      TEXT,
+    cta_text      VARCHAR(100),
+    cta_link      VARCHAR(200),
+    badge_text    VARCHAR(100),
+    order_index   INT DEFAULT 0,
+    is_active     BOOLEAN DEFAULT true,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  // ─── LANDING PAGE PROMOTIONS (popup) ──────────────────────────────
+  `CREATE TABLE IF NOT EXISTS landing_promotions (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title         VARCHAR(200) NOT NULL,
+    description   TEXT,
+    discount_text VARCHAR(100),
+    coupon_code   VARCHAR(50),
+    image_url     TEXT,
+    bg_color      VARCHAR(20) DEFAULT '#FF6B00',
+    is_active     BOOLEAN DEFAULT true,
+    show_on_pages VARCHAR(100) DEFAULT 'landing',
+    starts_at     TIMESTAMPTZ DEFAULT NOW(),
+    ends_at       TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  // ─── LANDING PAGE SECTIONS (editable content) ─────────────────────
+  `CREATE TABLE IF NOT EXISTS landing_sections (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    section_key   VARCHAR(100) UNIQUE NOT NULL,
+    title         VARCHAR(200),
+    subtitle      VARCHAR(300),
+    content       JSONB DEFAULT '{}',
+    is_active     BOOLEAN DEFAULT true,
+    updated_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  // ─── COUPONS / DISCOUNT CODES ─────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS coupons (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code          VARCHAR(50) UNIQUE NOT NULL,
+    type          VARCHAR(10) NOT NULL CHECK (type IN ('percent','fixed')) DEFAULT 'percent',
+    value         INT NOT NULL,
+    min_purchase  BIGINT DEFAULT 0,
+    max_uses      INT DEFAULT 0,
+    use_count     INT DEFAULT 0,
+    is_active     BOOLEAN DEFAULT true,
+    program_id    UUID REFERENCES programs(id) ON DELETE SET NULL,
+    expires_at    TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_coupons_code ON coupons(code)`,
+
+  `DO $$ BEGIN
+    ALTER TABLE transactions ADD COLUMN IF NOT EXISTS coupon_id UUID;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  // ─── AUDIT LOGS ────────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS audit_logs (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    admin_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    admin_name    VARCHAR(120),
+    action        VARCHAR(50) NOT NULL,
+    entity_type   VARCHAR(50) NOT NULL,
+    entity_id     VARCHAR(50),
+    details       JSONB DEFAULT '{}',
+    ip_address    VARCHAR(45),
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_logs_admin ON audit_logs(admin_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC)`,
+
+  // ─── ADMIN SETTINGS ────────────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS admin_settings (
+    key           VARCHAR(100) PRIMARY KEY,
+    value         JSONB NOT NULL DEFAULT '{}',
+    updated_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+    updated_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  // ─── SEED DEFAULT LANDING SECTIONS ─────────────────────────────────
+  `INSERT INTO landing_sections (section_key, title, subtitle, content) VALUES
+    ('hero', 'Raih Masa Depan Bersama Kuarta', 'Platform belajar online #1 di Indonesia untuk CPNS, UTBK, dan bimbel sekolah',
+      '{"words":["Prestasi","Masa Depan","Impianmu","Karirmu","Nilai Terbaik"],"stats":[{"target":120000,"label":"Siswa Aktif","fmt":"K+"},{"target":49,"label":"Rating Platform","fmt":"★"},{"target":98,"label":"Tingkat Lulus","fmt":"%"},{"target":500,"label":"Materi & Video","fmt":"+"}],"description":"Platform belajar online lengkap untuk CPNS, UTBK, Olimpiade, dan bimbel sekolah. Video HD, tryout akurat, dan live class bersama mentor terbaik.","button_text":"Mulai Belajar Gratis","button_link":"/register"}'),
+    ('features', 'Semua yang Kamu Butuhkan', 'Ada di Sini',
+      '{"items":[{"icon":"📹","title":"Video HD Interaktif","desc":"Ratusan video berkualitas tinggi dari pengajar berpengalaman."},{"icon":"📝","title":"Tryout Mirip Asli","desc":"Simulasi tryout dengan soal yang diperbarui setiap bulan."},{"icon":"🎥","title":"Live Class Rutin","desc":"Sesi belajar langsung bersama mentor setiap minggu."},{"icon":"📊","title":"Analitik Performa","desc":"Pantau perkembangan nilai dengan grafik yang detail."},{"icon":"🏆","title":"Leaderboard Nasional","desc":"Bersaing dengan ribuan siswa dari seluruh Indonesia."},{"icon":"📱","title":"Akses Multi-Device","desc":"Belajar dari HP, tablet, atau laptop — sinkron otomatis."}]}'),
+    ('testimonials', 'Mereka Sudah Membuktikannya', 'Testimoni dari siswa yang berhasil',
+      '{"items":[{"name":"Rizki Firmansyah","role":"Lulus CPNS Kemenkeu 2024","avatar":"RF","score":478,"text":"Berkat Kuarta saya lulus SKD dengan skor tertinggi di batch saya. Tryout-nya sangat mirip soal asli!"},{"name":"Siti Rahayu","role":"Mahasiswa UI – Kedokteran","avatar":"SR","score":820,"text":"UTBK-ku naik 150 poin dalam 3 bulan. Live class-nya sangat membantu."},{"name":"Bagas Pratama","role":"Lulus IPDN 2024","avatar":"BP","score":461,"text":"Platform terbaik untuk persiapan kedinasan. Materinya lengkap, harganya terjangkau."}]}'),
+    ('cta', 'Siap Meraih Mimpimu?', 'Bergabung dengan 120.000+ siswa yang sudah membuktikan',
+      '{"button_text":"Daftar Sekarang — Gratis","button_link":"/register","guarantees":["✓ Tanpa kartu kredit","✓ Akses instan","✓ Bisa dibatalkan kapan saja"]}'),
+    ('footer', '', '© 2026 Kuarta. All rights reserved.',
+      '{"links":[{"label":"Tentang","url":""},{"label":"Program","url":""},{"label":"Blog","url":""},{"label":"Kontak","url":""},{"label":"Privasi","url":""}]}'),
+    ('ticker', '', '',
+      '{"items":["CPNS 2025","UTBK SNBT","Olimpiade OSN","Bimbel SD SMP SMA","Persiapan Karier","Live Class Rutin","Tryout Akurat","Kuarta"]}')
+  ON CONFLICT (section_key) DO NOTHING`,
+
+  // ─── SEED DEFAULT ADMIN SETTINGS ─────────────────────────────────
+  `INSERT INTO admin_settings (key, value) VALUES
+    ('wa_number', '{"number":"6281234567890"}')
+  ON CONFLICT (key) DO NOTHING`,
+
+  // ─── UPDATE EXISTING HERO CONTENT WITH DESCRIPTION FIELD ───────────
+  `UPDATE landing_sections SET content = content || '{"description":"Platform belajar online lengkap untuk CPNS, UTBK, Olimpiade, dan bimbel sekolah. Video HD, tryout akurat, dan live class bersama mentor terbaik."}'::jsonb
+   WHERE section_key='hero' AND (content->>'description' IS NULL OR content->>'description' = '')`,
+
+  // ─── FIX HERO STATS FORMAT (migrate old value→string to target/fmt) ─
+  `UPDATE landing_sections SET content = jsonb_set(
+    content,
+    '{stats}',
+    '[
+      {"target":120000,"label":"Siswa Aktif","fmt":"K+"},
+      {"target":49,"label":"Rating Platform","fmt":"★"},
+      {"target":98,"label":"Tingkat Lulus","fmt":"%"},
+      {"target":500,"label":"Materi & Video","fmt":"+"}
+    ]'::jsonb
+  )
+  WHERE section_key='hero' AND content->'stats' IS NOT NULL
+    AND content->'stats'->0->>'target' IS NULL`,
 ];
 
 async function migrate() {
-  console.log('🗄️  Running migrations...');
+  console.log('Running migrations...');
   for (const sql of migrations) {
     try {
       await query(sql);
@@ -248,7 +509,7 @@ async function migrate() {
       throw err;
     }
   }
-  console.log(`✅ Migrations complete — ${migrations.length} statements`);
+  console.log(`Migrations complete — ${migrations.length} statements`);
   process.exit(0);
 }
 

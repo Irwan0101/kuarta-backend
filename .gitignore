@@ -22,6 +22,8 @@ pids
 .env.test.local
 .env.production.local
 .env.*.local
+- Copy.env
+ - Copy.env
 
 # Debugging
 .vimsessions

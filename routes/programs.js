@@ -7,7 +7,7 @@ const router = Router();
 // GET /api/programs
 router.get('/', optionalAuth, async (req, res) => {
   try {
-    const { category, search } = req.query;
+    const { category, search, pricing_type } = req.query;
     let sql = `
       SELECT p.*,
         CASE WHEN up.user_id IS NOT NULL THEN true ELSE false END as is_enrolled
@@ -19,6 +19,10 @@ router.get('/', optionalAuth, async (req, res) => {
     if (category && category !== 'all') {
       params.push(category);
       sql += ` AND p.category=$${params.length}`;
+    }
+    if (pricing_type) {
+      params.push(pricing_type);
+      sql += ` AND p.pricing_type=$${params.length}`;
     }
     if (search) {
       params.push(`%${search}%`);
@@ -49,32 +53,45 @@ router.get('/:slug', optionalAuth, async (req, res) => {
 
     const program = result.rows[0];
 
-    // Modules & lessons
-    const modules = await query(
-      'SELECT * FROM modules WHERE program_id=$1 ORDER BY order_index',
+    // Optimized: single query with json_agg instead of N+1
+    const moduleRows = await query(`
+      SELECT m.id, m.title, m.icon, m.order_index, m.program_id, m.created_at,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', l.id, 'title', l.title, 'type', l.type,
+              'video_url', l.video_url, 'pdf_url', l.pdf_url,
+              'duration_mins', l.duration_mins, 'order_index', l.order_index,
+              'description', l.description, 'is_free_preview', l.is_free_preview,
+              'completed', false
+            ) ORDER BY l.order_index
+          ) FILTER (WHERE l.id IS NOT NULL),
+          '[]'::json
+        ) as lessons
+      FROM modules m
+      LEFT JOIN lessons l ON l.module_id = m.id
+      WHERE m.program_id = $1
+      GROUP BY m.id, m.title, m.icon, m.order_index, m.program_id, m.created_at
+      ORDER BY m.order_index`,
       [program.id]
     );
 
-    for (const mod of modules.rows) {
-      const lessons = await query(
-        'SELECT * FROM lessons WHERE module_id=$1 ORDER BY order_index',
-        [mod.id]
+    // If authenticated, fetch all progress in one query
+    if (req.user?.id) {
+      const progressRows = await query(`
+        SELECT lesson_id, completed FROM lesson_progress
+        WHERE user_id=$1 AND program_id=$2`,
+        [req.user.id, program.id]
       );
-      mod.lessons = lessons.rows;
+      const progressMap = {};
+      progressRows.rows.forEach(p => progressMap[p.lesson_id] = p.completed);
 
-      // Progress if authenticated
-      if (req.user?.id) {
-        const progress = await query(
-          'SELECT lesson_id, completed FROM lesson_progress WHERE user_id=$1 AND module_id=$2',
-          [req.user.id, mod.id]
-        );
-        const progressMap = {};
-        progress.rows.forEach(p => progressMap[p.lesson_id] = p.completed);
+      for (const mod of moduleRows.rows) {
         mod.lessons = mod.lessons.map(l => ({ ...l, completed: progressMap[l.id] || false }));
       }
     }
 
-    program.modules = modules.rows;
+    program.modules = moduleRows.rows;
     res.json(program);
   } catch (err) {
     res.status(500).json({ error: 'Gagal mengambil detail program' });
@@ -97,7 +114,7 @@ router.get('/user/enrolled', authenticate, async (req, res) => {
       JOIN programs p ON p.id=up.program_id
       LEFT JOIN lessons l ON l.program_id=p.id
       LEFT JOIN lesson_progress lp ON lp.lesson_id=l.id AND lp.user_id=$1 AND lp.completed=true
-      WHERE up.user_id=$1 AND up.is_active=true
+      WHERE up.user_id=$1 AND up.is_active=true AND (up.expires_at IS NULL OR up.expires_at > NOW())
       GROUP BY p.id, up.enrolled_at, up.expires_at
       ORDER BY up.enrolled_at DESC`,
       [req.user.id]
@@ -153,10 +170,22 @@ router.put('/:id', authenticate, requireAdmin, async (req, res) => {
   }
 });
 
-// POST /api/programs/:id/progress (mark lesson done)
+// POST /api/programs/:id/progress
 router.post('/:id/progress', authenticate, async (req, res) => {
   try {
     const { lesson_id, completed, watch_seconds } = req.body;
+
+    // Verify enrollment
+    const enrolled = await query(
+      `SELECT id FROM user_programs
+       WHERE user_id=$1 AND program_id=$2 AND is_active=true
+       AND (expires_at IS NULL OR expires_at > NOW())`,
+      [req.user.id, req.params.id]
+    );
+    if (!enrolled.rows.length) {
+      return res.status(403).json({ error: 'Kamu belum terdaftar di program ini' });
+    }
+
     const result = await query(`
       INSERT INTO lesson_progress (user_id, lesson_id, program_id, completed, watch_seconds, completed_at)
       VALUES ($1,$2,$3,$4,$5,CASE WHEN $4 THEN NOW() ELSE NULL END)
@@ -168,7 +197,6 @@ router.post('/:id/progress', authenticate, async (req, res) => {
       [req.user.id, lesson_id, req.params.id, completed || false, watch_seconds || 0]
     );
 
-    // Award points for completing lesson
     if (completed) {
       await query('UPDATE users SET reward_points=reward_points+10 WHERE id=$1', [req.user.id]);
     }

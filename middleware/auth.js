@@ -11,13 +11,23 @@ export const authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
     const result = await query(
-      'SELECT id, name, email, role, plan, plan_expires_at, avatar_url, reward_points, streak_count FROM users WHERE id=$1 AND is_active=true',
+      `SELECT id, name, email, role, plan, plan_expires_at, avatar_url,
+              reward_points, streak_count, token_version
+       FROM users WHERE id=$1 AND is_active=true`,
       [decoded.userId]
     );
     if (!result.rows.length) {
       return res.status(401).json({ error: 'User tidak ditemukan' });
     }
-    req.user = result.rows[0];
+
+    const user = result.rows[0];
+    if (decoded.token_version !== undefined && user.token_version !== undefined) {
+      if (decoded.token_version !== user.token_version) {
+        return res.status(401).json({ error: 'Sesi telah berakhir. Silakan login ulang.', code: 'TOKEN_REVOKED' });
+      }
+    }
+
+    req.user = user;
     next();
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
@@ -50,6 +60,8 @@ export const optionalAuth = async (req, res, next) => {
       const result = await query('SELECT id, name, email, role, plan FROM users WHERE id=$1', [decoded.userId]);
       if (result.rows.length) req.user = result.rows[0];
     }
-  } catch (_) {}
+  } catch (_) {
+    // Silent fail for optional auth — token invalid or expired is fine
+  }
   next();
 };

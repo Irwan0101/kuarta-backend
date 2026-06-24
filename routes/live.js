@@ -8,13 +8,16 @@ const router = Router();
 router.get('/', authenticate, async (req, res) => {
   try {
     const result = await query(`
-      SELECT lc.*, u.name as mentor_name, p.name as program_name, p.icon as program_icon,
-             CASE WHEN up.user_id IS NOT NULL THEN true ELSE false END as is_enrolled
+      SELECT lc.*, u.name as mentor_name, p.name as program_name, p.icon as program_icon
       FROM live_classes lc
       LEFT JOIN users u ON u.id=lc.mentor_id
       LEFT JOIN programs p ON p.id=lc.program_id
-      LEFT JOIN user_programs up ON up.program_id=lc.program_id AND up.user_id=$1 AND up.is_active=true
       WHERE lc.scheduled_at >= NOW()-INTERVAL '2 hours'
+        AND EXISTS (
+          SELECT 1 FROM user_programs up
+          WHERE up.program_id=lc.program_id AND up.user_id=$1 AND up.is_active=true
+          AND (up.expires_at IS NULL OR up.expires_at > NOW())
+        )
       ORDER BY lc.scheduled_at ASC LIMIT 20`,
       [req.user.id]
     );
@@ -33,7 +36,13 @@ router.get('/recordings', authenticate, async (req, res) => {
       LEFT JOIN users u ON u.id=lc.mentor_id
       LEFT JOIN programs p ON p.id=lc.program_id
       WHERE lc.is_recorded=true AND lc.recording_url IS NOT NULL
-      ORDER BY lc.scheduled_at DESC LIMIT 20`
+        AND EXISTS (
+          SELECT 1 FROM user_programs up
+          WHERE up.program_id=lc.program_id AND up.user_id=$1 AND up.is_active=true
+          AND (up.expires_at IS NULL OR up.expires_at > NOW())
+        )
+      ORDER BY lc.scheduled_at DESC LIMIT 20`,
+      [req.user.id]
     );
     res.json(result.rows);
   } catch (err) {

@@ -1,6 +1,8 @@
 import { Router } from 'express';
+import bcrypt from 'bcrypt';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { audit } from '../middleware/audit.js';
 
 const router = Router();
 router.use(authenticate, requireAdmin);
@@ -80,35 +82,40 @@ router.get('/stats', async (req, res) => {
   }
 });
 
+const PERIOD_MAP = {
+  '7d':  { interval: '7 days',   trunc: 'day'   },
+  '30d': { interval: '30 days',  trunc: 'day'   },
+  '90d': { interval: '90 days',  trunc: 'week'  },
+  '1m':  { interval: '1 month',  trunc: 'day'   },
+  '3m':  { interval: '3 months', trunc: 'week'  },
+  '6m':  { interval: '6 months', trunc: 'month' },
+  '1y':  { interval: '1 year',   trunc: 'month' },
+};
+
 // GET /api/admin/revenue?period=7d|30d|90d|6m|3m|1m|1y
 router.get('/revenue', async (req, res) => {
   try {
-    const periodMap = {
-      '7d':  { interval: '7 days',   trunc: 'day'   },
-      '30d': { interval: '30 days',  trunc: 'day'   },
-      '90d': { interval: '90 days',  trunc: 'week'  },
-      '1m':  { interval: '1 month',  trunc: 'day'   },
-      '3m':  { interval: '3 months', trunc: 'week'  },
-      '6m':  { interval: '6 months', trunc: 'month' },
-      '1y':  { interval: '1 year',   trunc: 'month' },
-    };
-    const { interval, trunc } = periodMap[req.query.period] || periodMap['7d'];
+    const period = typeof req.query.period === 'string' ? req.query.period : '7d';
+    const config = PERIOD_MAP[period] || PERIOD_MAP['7d'];
+    const trunc = config.trunc;
+    const truncStep = trunc === 'week' ? 'week' : trunc === 'month' ? 'month' : 'day';
 
     const result = await query(`
       SELECT
-        DATE_TRUNC('${trunc}', gs.d)::date AS date,
-        COALESCE(SUM(t.gross_amount), 0)   AS amount,
-        COUNT(t.id)                         AS user_count
+        DATE_TRUNC($1::text, gs.d)::date AS date,
+        COALESCE(SUM(t.gross_amount), 0) AS amount,
+        COUNT(t.id) AS user_count
       FROM generate_series(
-        (NOW() - INTERVAL '${interval}')::date,
+        (NOW() - $2::interval)::date,
         NOW()::date,
-        '1 ${trunc === 'week' ? 'week' : trunc === 'month' ? 'month' : 'day'}'::interval
+        ('1 ' || $3::text)::interval
       ) AS gs(d)
       LEFT JOIN transactions t
-        ON DATE_TRUNC('${trunc}', t.paid_at) = DATE_TRUNC('${trunc}', gs.d)
+        ON DATE_TRUNC($1::text, t.paid_at) = DATE_TRUNC($1::text, gs.d)
         AND t.status = 'success'
       GROUP BY 1
-      ORDER BY 1`
+      ORDER BY 1`,
+      [trunc, config.interval, truncStep]
     );
 
     const rows = result.rows.map(r => ({
@@ -132,6 +139,23 @@ router.get('/revenue', async (req, res) => {
 /* ══════════════════════════════════════════════════════════════════
    USERS
 ══════════════════════════════════════════════════════════════════ */
+
+router.post('/users', audit('create_user', 'user'), async (req, res) => {
+  try {
+    const { name, email, password, role, plan } = req.body;
+    if (!name || !email || !password) return res.status(400).json({ error: 'Nama, email, dan password wajib diisi' });
+    const hash = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
+    const result = await query(
+      `INSERT INTO users (name, email, password_hash, role, plan, email_verified) VALUES ($1,$2,$3,$4,$5,true) RETURNING id,name,email,role,plan,created_at`,
+      [name, email.toLowerCase().trim(), hash.toString(), role || 'user', plan || 'free']
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Email sudah terdaftar' });
+    console.error(err);
+    res.status(500).json({ error: 'Gagal membuat user' });
+  }
+});
 
 router.get('/users', async (req, res) => {
   try {
@@ -172,8 +196,11 @@ router.get('/users', async (req, res) => {
   }
 });
 
-router.put('/users/:id', async (req, res) => {
+router.put('/users/:id', audit('update_user', 'user'), async (req, res) => {
   try {
+    if (req.params.id === req.user.id && req.body.role && req.body.role !== 'admin') {
+      return res.status(400).json({ error: 'Tidak bisa menurunkan role sendiri' });
+    }
     const { plan, plan_expires_at, is_active, role } = req.body;
     const result = await query(`
       UPDATE users SET
@@ -234,24 +261,25 @@ router.get('/programs', async (req, res) => {
   }
 });
 
-router.post('/programs', async (req, res) => {
+router.post('/programs', audit('create_program', 'program'), async (req, res) => {
   try {
-    // FIX: migration programs punya kolom slug, category, duration_months (bukan duration_days)
     const {
       slug, name, category, subcategory, description,
       price, duration_months, icon, is_active = true,
       thumbnail_url, bg_gradient, is_featured,
-      badge_label, badge_type
+      badge_label, badge_type, pricing_type,
+      session_price, session_count
     } = req.body;
     const result = await query(`
       INSERT INTO programs
         (slug, name, category, subcategory, description, price, duration_months,
-         icon, thumbnail_url, bg_gradient, is_featured, is_active, badge_label, badge_type)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         icon, thumbnail_url, bg_gradient, is_featured, is_active, badge_label, badge_type,
+         pricing_type, session_price, session_count)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       RETURNING *`,
       [slug, name, category, subcategory, description, price, duration_months || 1,
        icon || '📚', thumbnail_url, bg_gradient, is_featured || false, is_active,
-       badge_label, badge_type]
+       badge_label, badge_type, pricing_type || 'bundle', session_price || null, session_count || 0]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -260,12 +288,13 @@ router.post('/programs', async (req, res) => {
   }
 });
 
-router.put('/programs/:id', async (req, res) => {
+router.put('/programs/:id', audit('update_program', 'program'), async (req, res) => {
   try {
     const {
       name, description, icon, price, duration_months,
       is_active, thumbnail_url, bg_gradient, is_featured,
-      badge_label, badge_type
+      badge_label, badge_type, pricing_type,
+      session_price, session_count
     } = req.body;
     const result = await query(`
       UPDATE programs SET
@@ -280,11 +309,15 @@ router.put('/programs/:id', async (req, res) => {
         is_featured     = COALESCE($9, is_featured),
         badge_label     = COALESCE($10, badge_label),
         badge_type      = COALESCE($11, badge_type),
+        pricing_type    = COALESCE($12, pricing_type),
+        session_price   = COALESCE($13, session_price),
+        session_count   = COALESCE($14, session_count),
         updated_at      = NOW()
-      WHERE id = $12
+      WHERE id = $15
       RETURNING *`,
       [name, description, icon, price, duration_months, is_active,
-       thumbnail_url, bg_gradient, is_featured, badge_label, badge_type, req.params.id]
+       thumbnail_url, bg_gradient, is_featured, badge_label, badge_type,
+       pricing_type, session_price, session_count, req.params.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Program tidak ditemukan' });
     res.json(result.rows[0]);
@@ -294,7 +327,7 @@ router.put('/programs/:id', async (req, res) => {
   }
 });
 
-router.delete('/programs/:id', async (req, res) => {
+router.delete('/programs/:id', audit('delete_program', 'program'), async (req, res) => {
   try {
     const result = await query(`
       UPDATE programs SET is_active = false, updated_at = NOW()
@@ -747,7 +780,7 @@ router.get('/materi/topics/:id/videos', async (req, res) => {
     const result = await query(`
       SELECT id, module_id as topic_id, title, video_url, pdf_url,
              duration_mins, order_index as order_num, type,
-             is_free_preview as is_free, created_at
+             is_free_preview as is_free, description, created_at
       FROM lessons
       WHERE module_id = $1
       ORDER BY order_index ASC, created_at ASC`,
@@ -762,7 +795,7 @@ router.get('/materi/topics/:id/videos', async (req, res) => {
 
 router.post('/materi/topics/:id/videos', async (req, res) => {
   try {
-    const { title, video_url, pdf_url, duration_mins, order_num, is_free = false, type = 'video' } = req.body;
+    const { title, video_url, pdf_url, description, duration_mins, order_num, is_free = false, type = 'video' } = req.body;
     // FIX: INSERT ke lessons
     // Ambil program_id dari module dulu
     const mod = await query(`SELECT program_id FROM modules WHERE id = $1`, [req.params.id]);
@@ -770,16 +803,44 @@ router.post('/materi/topics/:id/videos', async (req, res) => {
 
     const result = await query(`
       INSERT INTO lessons
-        (module_id, program_id, title, type, video_url, pdf_url, duration_mins, order_index, is_free_preview)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        (module_id, program_id, title, type, video_url, pdf_url, description, duration_mins, order_index, is_free_preview)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       RETURNING *`,
       [req.params.id, mod.rows[0].program_id, title, type,
-       video_url, pdf_url, duration_mins || 0, order_num || 0, is_free]
+       video_url, pdf_url, description, duration_mins || 0, order_num || 0, is_free]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Gagal menambah video' });
+  }
+});
+
+router.put('/materi/videos/:id', async (req, res) => {
+  try {
+    const { title, video_url, pdf_url, description, duration_mins, type, is_free, order_num } = req.body;
+    const result = await query(`
+      UPDATE lessons SET
+        title            = COALESCE($1, title),
+        video_url        = COALESCE($2, video_url),
+        pdf_url          = COALESCE($3, pdf_url),
+        description      = COALESCE($4, description),
+        duration_mins    = COALESCE($5, duration_mins),
+        type             = COALESCE($6, type),
+        is_free_preview  = COALESCE($7, is_free_preview),
+        order_index      = COALESCE($8, order_index)
+      WHERE id = $9
+      RETURNING id, module_id as topic_id, title, video_url, pdf_url,
+                duration_mins, order_index as order_num, type,
+                is_free_preview as is_free, description, created_at`,
+      [title, video_url, pdf_url, description, duration_mins, type,
+       is_free, order_num, req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Video tidak ditemukan' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal memperbarui video' });
   }
 });
 
@@ -796,8 +857,174 @@ router.delete('/materi/videos/:id', async (req, res) => {
 });
 
 /* ══════════════════════════════════════════════════════════════════
+   LANDING PAGE BUILDER
+══════════════════════════════════════════════════════════════════ */
+
+// Banners
+router.get('/landing/banners', async (req, res) => {
+  try {
+    const r = await query('SELECT * FROM landing_banners ORDER BY order_index ASC');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/landing/banners', audit('create_banner', 'banner'), async (req, res) => {
+  try {
+    const { image_url, title, subtitle, cta_text, cta_link, badge_text, order_index } = req.body;
+    const r = await query(
+      `INSERT INTO landing_banners (image_url, title, subtitle, cta_text, cta_link, badge_text, order_index)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [image_url || null, title, subtitle || null, cta_text || null, cta_link || null, badge_text || null, order_index || 0]
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/landing/banners/:id', audit('update_banner', 'banner'), async (req, res) => {
+  try {
+    const { image_url, title, subtitle, cta_text, cta_link, badge_text, order_index, is_active } = req.body;
+    const r = await query(
+      `UPDATE landing_banners SET image_url=$1, title=$2, subtitle=$3, cta_text=$4, cta_link=$5, badge_text=$6, order_index=$7, is_active=$8 WHERE id=$9 RETURNING *`,
+      [image_url || null, title, subtitle || null, cta_text || null, cta_link || null, badge_text || null, order_index || 0, is_active ?? true, req.params.id]
+    );
+    res.json(r.rows[0] || { error: 'not found' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/landing/banners/:id', async (req, res) => {
+  try {
+    await query('DELETE FROM landing_banners WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Promotions
+router.get('/landing/promotions', async (req, res) => {
+  try {
+    const r = await query('SELECT * FROM landing_promotions ORDER BY created_at DESC');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/landing/promotions', async (req, res) => {
+  try {
+    const { title, description, discount_text, coupon_code, image_url, bg_color, is_active, show_on_pages, starts_at, ends_at } = req.body;
+    const r = await query(
+      `INSERT INTO landing_promotions (title, description, discount_text, coupon_code, image_url, bg_color, is_active, show_on_pages, starts_at, ends_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [title, description || null, discount_text || null, coupon_code || null, image_url || null, bg_color || '#FF6B00', is_active ?? true, show_on_pages || 'landing', starts_at || new Date(), ends_at || null]
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/landing/promotions/:id', async (req, res) => {
+  try {
+    const { title, description, discount_text, coupon_code, image_url, bg_color, is_active, show_on_pages, starts_at, ends_at } = req.body;
+    const r = await query(
+      `UPDATE landing_promotions SET title=$1, description=$2, discount_text=$3, coupon_code=$4, image_url=$5, bg_color=$6, is_active=$7, show_on_pages=$8, starts_at=$9, ends_at=$10 WHERE id=$11 RETURNING *`,
+      [title, description || null, discount_text || null, coupon_code || null, image_url || null, bg_color || '#FF6B00', is_active ?? true, show_on_pages || 'landing', starts_at || new Date(), ends_at || null, req.params.id]
+    );
+    res.json(r.rows[0] || { error: 'not found' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/landing/promotions/:id', async (req, res) => {
+  try {
+    await query('DELETE FROM landing_promotions WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Sections
+router.get('/landing/sections', async (req, res) => {
+  try {
+    const r = await query('SELECT * FROM landing_sections ORDER BY section_key');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/landing/sections/:key', async (req, res) => {
+  try {
+    const { title, subtitle, content, is_active } = req.body;
+    const r = await query(
+      `UPDATE landing_sections SET title=$1, subtitle=$2, content=$3, is_active=$4 WHERE section_key=$5 RETURNING *`,
+      [title, subtitle || null, JSON.stringify(content || {}), is_active ?? true, req.params.key]
+    );
+    res.json(r.rows[0] || { error: 'not found' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Settings (admin_settings table)
+router.get('/landing/settings', async (req, res) => {
+  try {
+    const r = await query('SELECT * FROM admin_settings ORDER BY key');
+    const map = {};
+    r.rows.forEach(row => { map[row.key] = row.value; });
+    res.json(map);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.put('/landing/settings/:key', audit('update_setting', 'setting'), async (req, res) => {
+  try {
+    const { value } = req.body;
+    const r = await query(
+      `INSERT INTO admin_settings (key, value) VALUES ($1, $2::jsonb)
+       ON CONFLICT (key) DO UPDATE SET value=$2::jsonb, updated_at=NOW()
+       RETURNING *`,
+      [req.params.key, JSON.stringify(value)]
+    );
+    res.json(r.rows[0]);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+/* ══════════════════════════════════════════════════════════════════
    NOTIFICATIONS
 ══════════════════════════════════════════════════════════════════ */
+
+/* ══════════════════════════════════════════════════════════════════
+   COUPONS
+══════════════════════════════════════════════════════════════════ */
+
+router.get('/coupons', async (req, res) => {
+  try {
+    const r = await query('SELECT * FROM coupons ORDER BY created_at DESC');
+    res.json(r.rows);
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.post('/coupons', async (req, res) => {
+  try {
+    const { code, type, value, min_purchase, max_uses, program_id, expires_at } = req.body;
+    const r = await query(
+      `INSERT INTO coupons (code, type, value, min_purchase, max_uses, program_id, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [code.toUpperCase(), type || 'percent', value, min_purchase || 0, max_uses || 0, program_id || null, expires_at || null]
+    );
+    res.status(201).json(r.rows[0]);
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'Kode kupon sudah digunakan' });
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.put('/coupons/:id', async (req, res) => {
+  try {
+    const { type, value, min_purchase, max_uses, is_active, expires_at } = req.body;
+    const r = await query(
+      `UPDATE coupons SET type=$1, value=$2, min_purchase=$3, max_uses=$4, is_active=$5, expires_at=$6 WHERE id=$7 RETURNING *`,
+      [type, value, min_purchase, max_uses, is_active, expires_at, req.params.id]
+    );
+    res.json(r.rows[0] || { error: 'not found' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+router.delete('/coupons/:id', async (req, res) => {
+  try {
+    await query('DELETE FROM coupons WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 router.post('/notifications/broadcast', async (req, res) => {
   try {
@@ -817,20 +1044,112 @@ router.post('/notifications/broadcast', async (req, res) => {
     }
 
     if (userIds.length) {
-      const placeholders = userIds.map((_, i) =>
-        `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`
-      ).join(',');
-      const values = userIds.flatMap(uid => [uid, title, message, type || 'info']);
-      await query(
-        `INSERT INTO notifications (user_id, title, message, type) VALUES ${placeholders}`,
-        values
-      );
+      const BATCH_SIZE = 500;
+      for (let i = 0; i < userIds.length; i += BATCH_SIZE) {
+        const batch = userIds.slice(i, i + BATCH_SIZE);
+        const placeholders = batch.map((_, j) =>
+          `($${j * 4 + 1}, $${j * 4 + 2}, $${j * 4 + 3}, $${j * 4 + 4})`
+        ).join(',');
+        const values = batch.flatMap(uid => [uid, title, message, type || 'info']);
+        await query(
+          `INSERT INTO notifications (user_id, title, message, type) VALUES ${placeholders}`,
+          values
+        );
+      }
     }
 
     res.json({ sent: userIds.length });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Gagal mengirim notifikasi' });
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   AUDIT LOGS
+══════════════════════════════════════════════════════════════════ */
+
+router.get('/audit-logs', async (req, res) => {
+  try {
+    const { page = 1, limit = 50, action, entity_type, admin_id } = req.query;
+    const offset = (page - 1) * limit;
+    const params = [];
+    const conds = [];
+
+    if (action)      { params.push(action);      conds.push(`action=$${params.length}`); }
+    if (entity_type) { params.push(entity_type); conds.push(`entity_type=$${params.length}`); }
+    if (admin_id)    { params.push(admin_id);    conds.push(`admin_id=$${params.length}`); }
+
+    const where = conds.length ? 'WHERE ' + conds.join(' AND ') : '';
+
+    const count = await query(`SELECT COUNT(*) FROM audit_logs ${where}`, params);
+    const rows = await query(
+      `SELECT * FROM audit_logs ${where} ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    );
+
+    res.json({ logs: rows.rows, total: parseInt(count.rows[0].count) });
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal mengambil audit log' });
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════════
+   MENTORS (admin management)
+══════════════════════════════════════════════════════════════════ */
+
+router.get('/mentors', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT u.id, u.name, u.email, u.avatar_url, u.photo_url, u.city, u.bio, u.reward_points,
+             u.is_active, u.created_at, u.specialization, u.schedule,
+             (SELECT COUNT(*) FROM live_classes lc WHERE lc.mentor_id=u.id) as total_classes,
+             (SELECT COUNT(*) FROM mentoring_sessions ms WHERE ms.mentor_id=u.id) as total_sessions
+      FROM users u WHERE u.role='mentor' ORDER BY u.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal mengambil daftar mentor' });
+  }
+});
+
+router.put('/mentors/:id', audit('update_mentor', 'mentor'), async (req, res) => {
+  try {
+    const { name, city, bio, is_active, specialization, photo_url, schedule } = req.body;
+    const result = await query(
+      `UPDATE users SET name=COALESCE($1,name), city=COALESCE($2,city), bio=COALESCE($3,bio),
+       is_active=COALESCE($4,is_active),
+       specialization=COALESCE($5::text[],specialization),
+       photo_url=COALESCE($6,photo_url),
+       schedule=COALESCE($7::jsonb,schedule),
+       updated_at=NOW()
+       WHERE id=$8 AND role='mentor' RETURNING id,name,email,role,is_active`,
+      [name, city, bio, is_active, specialization || null, photo_url || null, schedule ? JSON.stringify(schedule) : null, req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Mentor tidak ditemukan' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal mengupdate mentor' });
+  }
+});
+
+router.put('/users/:id/role', audit('change_role', 'user'), async (req, res) => {
+  try {
+    const { role } = req.body;
+    if (!['user', 'mentor', 'admin'].includes(role)) {
+      return res.status(400).json({ error: 'Role tidak valid' });
+    }
+    if (req.user.id === req.params.id) {
+      return res.status(400).json({ error: 'Tidak bisa mengubah role sendiri' });
+    }
+    const result = await query(
+      `UPDATE users SET role=$1, updated_at=NOW() WHERE id=$2 RETURNING id,name,email,role,is_active`,
+      [role, req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'User tidak ditemukan' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal mengubah role user' });
   }
 });
 

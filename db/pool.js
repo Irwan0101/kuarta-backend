@@ -7,23 +7,16 @@ const { Pool } = pg;
 const isProduction = process.env.NODE_ENV === 'production' || process.env.DATABASE_URL;
 
 const pool = new Pool({
-  // Jika ada DATABASE_URL (di Render), pakai URL utuh dari Neon.
-  // Jika tidak ada (di lokal), pakai object konfigurasi pecahan bawah ini.
   connectionString: process.env.DATABASE_URL || undefined,
-  
   host: process.env.DATABASE_URL ? undefined : (process.env.DB_HOST || 'localhost'),
   port: process.env.DATABASE_URL ? undefined : (parseInt(process.env.DB_PORT) || 5432),
   database: process.env.DATABASE_URL ? undefined : (process.env.DB_NAME || 'kuarta_db'),
   user: process.env.DATABASE_URL ? undefined : (process.env.DB_USER || 'postgres'),
   password: process.env.DATABASE_URL ? undefined : process.env.DB_PASSWORD,
-  
-  // Setingan optimal untuk pool tetap dipertahankan
   max: 20,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 2000,
-  
-  // Neon WAJIB SSL, di lokal tidak perlu
-  ssl: isProduction ? { rejectUnauthorized: false } : false,
+  ssl: isProduction ? { rejectUnauthorized: true } : false,
 });
 
 pool.on('error', (err) => {

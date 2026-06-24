@@ -22,9 +22,13 @@ router.get('/', authenticate, async (req, res) => {
 // PUT /api/notifications/:id/read
 router.put('/:id/read', authenticate, async (req, res) => {
   try {
+    const { id } = req.params;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({ error: 'ID notifikasi tidak valid' });
+    }
     await query(
       'UPDATE notifications SET is_read=true WHERE id=$1 AND user_id=$2',
-      [req.params.id, req.user.id]
+      [id, req.user.id]
     );
     res.json({ ok: true });
   } catch (err) {

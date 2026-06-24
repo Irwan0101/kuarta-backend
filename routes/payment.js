@@ -1,81 +1,174 @@
 import { Router } from 'express';
 import midtransClient from 'midtrans-client';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 
 const router = Router();
 
-// Initialize Midtrans Snap
+const isProduction = process.env.MIDTRANS_IS_PRODUCTION === 'true';
 const snap = new midtransClient.Snap({
-  isProduction: process.env.MIDTRANS_IS_PRODUCTION === 'true',
+  isProduction,
   serverKey: process.env.MIDTRANS_SERVER_KEY,
   clientKey: process.env.MIDTRANS_CLIENT_KEY,
 });
-
-// Initialize Core API (for webhook verification)
 const coreApi = new midtransClient.CoreApi({
-  isProduction: process.env.MIDTRANS_IS_PRODUCTION === 'true',
+  isProduction,
   serverKey: process.env.MIDTRANS_SERVER_KEY,
 });
 
-// POST /api/payment/create  — create Midtrans Snap token
-// POST /api/payment/create  — create Midtrans Snap token
+// POST /api/payment/validate-coupon
+router.post('/validate-coupon', authenticate, async (req, res) => {
+  try {
+    const { coupon_code, program_id } = req.body;
+    if (!coupon_code) return res.status(400).json({ error: 'Kode kupon wajib diisi' });
+
+    const result = await query(
+      `SELECT * FROM coupons
+       WHERE code=$1 AND is_active=true
+       AND (expires_at IS NULL OR expires_at > NOW())
+       AND (max_uses = 0 OR use_count < max_uses)`,
+      [coupon_code.toUpperCase()]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Kode kupon tidak valid atau sudah kadaluwarsa' });
+
+    const coupon = result.rows[0];
+    if (coupon.program_id && coupon.program_id !== program_id) {
+      return res.status(400).json({ error: 'Kupon tidak berlaku untuk program ini' });
+    }
+
+    let discount = 0;
+    if (program_id) {
+      const prog = await query('SELECT price FROM programs WHERE id=$1', [program_id]);
+      if (prog.rows.length) {
+        const price = Number(prog.rows[0].price);
+        if (coupon.min_purchase > 0 && price < coupon.min_purchase) {
+          return res.status(400).json({ error: `Min. pembelian Rp ${coupon.min_purchase.toLocaleString('id-ID')}` });
+        }
+        discount = coupon.type === 'percent'
+          ? Math.floor(price * coupon.value / 100)
+          : coupon.value;
+      }
+    }
+
+    res.json({
+      valid: true,
+      coupon: { id: coupon.id, code: coupon.code, type: coupon.type, value: coupon.value },
+      discount,
+    });
+  } catch (err) {
+    console.error('Validate coupon error:', err);
+    res.status(500).json({ error: 'Gagal memvalidasi kupon' });
+  }
+});
+
+// POST /api/payment/create
 router.post('/create', authenticate, async (req, res) => {
   try {
-    const { program_id } = req.body;
-    if (!program_id) return res.status(400).json({ error: 'program_id wajib diisi' });
+    const { program_id, items: reqItems, coupon_code } = req.body;
 
-    // Get program
-    const progResult = await query('SELECT * FROM programs WHERE id=$1 AND is_active=true', [program_id]);
-    if (!progResult.rows.length) return res.status(404).json({ error: 'Program tidak ditemukan' });
-    const program = progResult.rows[0];
+    // Support both single program_id and multi-item array
+    let items = [];
+    if (reqItems && Array.isArray(reqItems) && reqItems.length > 0) {
+      items = reqItems;
+    } else if (program_id) {
+      items = [{ program_id }];
+    } else {
+      return res.status(400).json({ error: 'program_id atau items wajib diisi' });
+    }
 
-    // Check already enrolled
+    // Resolve all programs
+    const ids = items.map(i => i.program_id);
+    const progResult = await query(
+      `SELECT * FROM programs WHERE id = ANY($1::uuid[]) AND is_active=true`,
+      [ids]
+    );
+    if (progResult.rows.length !== ids.length) {
+      return res.status(404).json({ error: 'Beberapa program tidak ditemukan atau tidak aktif' });
+    }
+    const programs = progResult.rows;
+
+    // Check existing pending transaction for the first item (for single-item reuse)
+    if (items.length === 1 && program_id) {
+      const existing = await query(
+        `SELECT order_id, snap_token FROM transactions
+         WHERE user_id=$1 AND program_id=$2 AND status='pending' AND expired_at > NOW()`,
+        [req.user.id, program_id]
+      );
+      if (existing.rows.length && existing.rows[0].snap_token) {
+        return res.json({ snap_token: existing.rows[0].snap_token, order_id: existing.rows[0].order_id });
+      }
+    }
+
+    // Check enrollment for all programs
     const enrolled = await query(
-      'SELECT id FROM user_programs WHERE user_id=$1 AND program_id=$2 AND is_active=true',
-      [req.user.id, program_id]
+      `SELECT program_id FROM user_programs
+       WHERE user_id=$1 AND program_id = ANY($2::uuid[]) AND is_active=true`,
+      [req.user.id, ids]
     );
     if (enrolled.rows.length) {
-      return res.status(409).json({ error: 'Kamu sudah terdaftar di program ini' });
+      const enrolledIds = enrolled.rows.map(r => r.program_id);
+      return res.status(409).json({
+        error: 'Kamu sudah terdaftar di beberapa program',
+        enrolled: enrolledIds,
+      });
     }
 
-    // Check pending transaction
-    const existing = await query(
-      `SELECT order_id, snap_token FROM transactions
-       WHERE user_id=$1 AND program_id=$2 AND status='pending' AND expired_at > NOW()`,
-      [req.user.id, program_id]
-    );
-    if (existing.rows.length && existing.rows[0].snap_token) {
-      return res.json({ snap_token: existing.rows[0].snap_token, order_id: existing.rows[0].order_id });
-    }
-
-    // 🌟 PERBAIKAN: Paksa program.price menjadi tipe data Number murni
-    const programPrice = Number(program.price); 
+    const serviceFee = parseInt(process.env.SERVICE_FEE) || 5000;
     const orderId = `KRT-${Date.now()}-${uuidv4().slice(0, 8).toUpperCase()}`;
-    const serviceFee = 5000;
-    const grossAmount = programPrice + serviceFee; // Sekarang menghasilkan nilai: 855000 (Number)
 
-    // Create Midtrans Snap transaction
+    // Build item_details for Midtrans
+    let totalAmount = 0;
+    let discount = 0;
+    let couponId = null;
+    const midtransItems = [];
+    const orderProgramIds = [];
+
+    for (const p of programs) {
+      const price = Number(p.price);
+      const qty = items.find(i => i.program_id === p.id)?.quantity || 1;
+      totalAmount += price * qty;
+      orderProgramIds.push(p.id);
+      midtransItems.push({
+        id: p.id,
+        price,
+        quantity: qty,
+        name: p.name.substring(0, 50),
+      });
+    }
+
+    // Apply coupon
+    if (coupon_code) {
+      const cpn = await query(
+        `SELECT * FROM coupons WHERE code=$1 AND is_active=true
+         AND (expires_at IS NULL OR expires_at > NOW())
+         AND (max_uses = 0 OR use_count < max_uses)`,
+        [coupon_code.toUpperCase()]
+      );
+      if (cpn.rows.length) {
+        const c = cpn.rows[0];
+        if (!c.program_id || ids.includes(c.program_id)) {
+          discount = c.type === 'percent' ? Math.floor(totalAmount * c.value / 100) : c.value;
+          couponId = c.id;
+        }
+      }
+    }
+
+    const discountedAmount = Math.max(0, totalAmount - discount);
+    const grossAmount = discountedAmount + serviceFee;
+
+    if (discount > 0) {
+      midtransItems.push({ id: 'DISCOUNT', price: -discount, quantity: 1, name: 'Diskon Kupon' });
+    }
+    midtransItems.push({ id: 'SERVICE-FEE', price: serviceFee, quantity: 1, name: 'Biaya Layanan' });
+
     const snapParam = {
       transaction_details: {
         order_id: orderId,
-        gross_amount: grossAmount, // Sudah aman bertipe Number
+        gross_amount: grossAmount,
       },
-      item_details: [
-        { 
-          id: program.id, 
-          price: programPrice, // 🌟 Diubah ke variabel angka murni
-          quantity: 1, 
-          name: program.name.substring(0, 50) // Amankan panjang karakter teks nama item untuk Midtrans
-        },
-        { 
-          id: 'SERVICE-FEE', 
-          price: serviceFee, 
-          quantity: 1, 
-          name: 'Biaya Layanan' 
-        },
-      ],
+      item_details: midtransItems,
       customer_details: {
         first_name: req.user.name,
         email: req.user.email,
@@ -91,27 +184,47 @@ router.post('/create', authenticate, async (req, res) => {
 
     const snapRes = await snap.createTransaction(snapParam);
 
-    // Save transaction to DB
+    if (couponId) {
+      await query('UPDATE coupons SET use_count=use_count+1 WHERE id=$1', [couponId]);
+    }
+
+    // Store items as JSONB in transactions (backward compatible: program_id = first program)
+    const itemsJson = JSON.stringify(orderProgramIds.map(id => {
+      const p = programs.find(pr => pr.id === id);
+      return { program_id: id, name: p?.name, price: Number(p?.price || 0) };
+    }));
+
     await query(`
       INSERT INTO transactions (order_id, user_id, program_id, amount, service_fee, gross_amount,
-                                status, snap_token, expired_at)
-      VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,NOW()+INTERVAL '24 hours')`,
-      [orderId, req.user.id, program_id, programPrice, serviceFee, grossAmount, snapRes.token] // 🌟 Simpan sebagai Number murni agar data di DB rapi
+                                discount, items, status, snap_token, expired_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,'pending',$9,NOW()+INTERVAL '24 hours')`,
+      [orderId, req.user.id, orderProgramIds[0], totalAmount, serviceFee, grossAmount, discount,
+       itemsJson, snapRes.token]
     );
 
-    res.json({ snap_token: snapRes.token, order_id: orderId, client_key: process.env.MIDTRANS_CLIENT_KEY });
+    res.json({ snap_token: snapRes.token, order_id: orderId, multi: orderProgramIds.length > 1 });
   } catch (err) {
     console.error('Payment create error:', err);
     res.status(500).json({ error: 'Gagal membuat transaksi pembayaran' });
   }
 });
-// POST /api/payment/webhook  — Midtrans notification handler
+
+// POST /api/payment/webhook
 router.post('/webhook', async (req, res) => {
   try {
-    const notif = req.body;
+    const notif = Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString()) : req.body;
     const orderId = notif.order_id;
 
-    // Verify with Midtrans
+    const serverKey = process.env.MIDTRANS_SERVER_KEY;
+    const signature = crypto.createHmac('sha512', serverKey)
+      .update(orderId + (notif.status_code || '') + (notif.gross_amount || '') + serverKey)
+      .digest('hex');
+
+    if (notif.signature_key && notif.signature_key !== signature) {
+      console.error('Webhook signature mismatch');
+      return res.status(400).json({ error: 'Signature tidak valid' });
+    }
+
     let statusResponse;
     try {
       statusResponse = await coreApi.transaction.notification(notif);
@@ -133,44 +246,52 @@ router.post('/webhook', async (req, res) => {
       newStatus = 'refund';
     }
 
-    // Update transaction
     const txResult = await query(`
       UPDATE transactions
       SET status=$1, payment_method=$2, midtrans_response=$3::jsonb,
           paid_at=CASE WHEN $1='success' THEN NOW() ELSE NULL END
-      WHERE order_id=$4 AND status != 'success'
-      RETURNING user_id, program_id, amount`,
+      WHERE order_id=$4 AND status NOT IN ('success','refund')
+      RETURNING user_id, program_id, amount, items, status as old_status`,
       [newStatus, payment_type || 'unknown', JSON.stringify(statusResponse), orderId]
     );
 
-    // If success — activate enrollment
     if (newStatus === 'success' && txResult.rows.length) {
-      const { user_id, program_id, amount } = txResult.rows[0];
+      const { user_id, program_id, amount, items: txItems } = txResult.rows[0];
 
-      await query(`
-        INSERT INTO user_programs (user_id, program_id, expires_at)
-        VALUES ($1,$2,NOW()+INTERVAL '1 month' * (SELECT duration_months FROM programs WHERE id=$2))
-        ON CONFLICT (user_id, program_id) DO UPDATE SET is_active=true, expires_at=EXCLUDED.expires_at`,
-        [user_id, program_id]
-      );
+      // Handle multi-item enrollment
+      let programIds = [];
+      if (txItems && Array.isArray(txItems) && txItems.length > 0) {
+        programIds = txItems.map(i => i.program_id);
+      } else if (program_id) {
+        programIds = [program_id];
+      }
 
-      // Update program student_count
-      await query('UPDATE programs SET student_count=student_count+1 WHERE id=$1', [program_id]);
+      for (const pid of programIds) {
+        await query(`
+          INSERT INTO user_programs (user_id, program_id, expires_at)
+          VALUES ($1,$2,NOW()+INTERVAL '1 month' * (SELECT duration_months FROM programs WHERE id=$2))
+          ON CONFLICT (user_id, program_id) DO UPDATE SET is_active=true, expires_at=EXCLUDED.expires_at`,
+          [user_id, pid]
+        );
 
-      // Award reward points
+        await query('UPDATE programs SET student_count=student_count+1 WHERE id=$1', [pid]);
+      }
+
       const points = Math.floor(amount / 10000);
       await query('UPDATE users SET reward_points=reward_points+$1 WHERE id=$2', [points, user_id]);
 
-      // Notification
-      const prog = await query('SELECT name FROM programs WHERE id=$1', [program_id]);
-      if (prog.rows.length) {
-        await query(`
-          INSERT INTO notifications (user_id, title, message, type)
-          VALUES ($1,$2,$3,'success')`,
-          [user_id, 'Pembayaran Berhasil! ✅',
-           `Program ${prog.rows[0].name} sudah aktif. Mulai belajar sekarang!`]
-        );
-      }
+      // Notify user
+      const progNames = await query(
+        `SELECT name FROM programs WHERE id = ANY($1::uuid[])`,
+        [programIds]
+      );
+      const names = progNames.rows.map(r => r.name).join(', ');
+      await query(`
+        INSERT INTO notifications (user_id, title, message, type)
+        VALUES ($1,$2,$3,'success')`,
+        [user_id, 'Pembayaran Berhasil! ✅',
+         names ? `Program ${names} sudah aktif. Mulai belajar sekarang!` : 'Pembayaran berhasil.']
+      );
     }
 
     res.json({ status: 'ok' });
@@ -185,7 +306,6 @@ router.get('/history', authenticate, async (req, res) => {
   try {
     const { page = 1, limit = 10 } = req.query;
     const offset = (page - 1) * limit;
-
     const result = await query(`
       SELECT t.*, p.name as program_name, p.icon as program_icon, p.category as program_category
       FROM transactions t
@@ -195,9 +315,7 @@ router.get('/history', authenticate, async (req, res) => {
       LIMIT $2 OFFSET $3`,
       [req.user.id, limit, offset]
     );
-
     const total = await query('SELECT COUNT(*) FROM transactions WHERE user_id=$1', [req.user.id]);
-
     res.json({
       transactions: result.rows,
       total: parseInt(total.rows[0].count),
@@ -225,7 +343,7 @@ router.get('/status/:orderId', authenticate, async (req, res) => {
   }
 });
 
-// GET /api/payment/admin/all  (admin)
+// GET /api/payment/admin/all (admin)
 router.get('/admin/all', authenticate, requireAdmin, async (req, res) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
