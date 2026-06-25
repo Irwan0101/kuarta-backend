@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../db/pool.js';
 import { authenticate } from '../middleware/auth.js';
+import { validate, schemas } from '../middleware/validate.js';
 import crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 
@@ -98,21 +99,9 @@ const genTokens = (userId, tokenVersion = 0) => ({
 });
 
 // POST /api/auth/register
-router.post('/register', async (req, res) => {
+router.post('/register', validate(schemas.register), async (req, res) => {
   try {
-    const { name, email, password, phone, city } = req.body;
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Nama, email, dan password wajib diisi' });
-    }
-    if (password.length < 8) {
-      return res.status(400).json({ error: 'Password minimal 8 karakter' });
-    }
-    if (name.length > 120) {
-      return res.status(400).json({ error: 'Nama maksimal 120 karakter' });
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: 'Format email tidak valid' });
-    }
+    const { name, email, password, phone } = req.body;
 
     const existing = await query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (existing.rows.length) {
@@ -203,12 +192,9 @@ router.post('/resend-verification', authenticate, async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', validate(schemas.login), async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email dan password wajib diisi' });
-    }
 
     const result = await query(
       'SELECT * FROM users WHERE email=$1 AND is_active=true',
@@ -312,7 +298,7 @@ router.get('/me', authenticate, async (req, res) => {
 });
 
 // PUT /api/auth/profile
-router.put('/profile', authenticate, async (req, res) => {
+router.put('/profile', authenticate, validate(schemas.updateProfile), async (req, res) => {
   try {
     const { name, phone, city, bio, target_exam, avatar_url } = req.body;
     const result = await query(

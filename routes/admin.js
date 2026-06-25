@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { audit } from '../middleware/audit.js';
+import { validate, schemas } from '../middleware/validate.js';
 
 const router = Router();
 router.use(authenticate, requireAdmin);
@@ -140,10 +141,9 @@ router.get('/revenue', async (req, res) => {
    USERS
 ══════════════════════════════════════════════════════════════════ */
 
-router.post('/users', audit('create_user', 'user'), async (req, res) => {
+router.post('/users', audit('create_user', 'user'), validate(schemas.createUser), async (req, res) => {
   try {
     const { name, email, password, role, plan } = req.body;
-    if (!name || !email || !password) return res.status(400).json({ error: 'Nama, email, dan password wajib diisi' });
     const hash = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS) || 12);
     const result = await query(
       `INSERT INTO users (name, email, password_hash, role, plan, email_verified) VALUES ($1,$2,$3,$4,$5,true) RETURNING id,name,email,role,plan,created_at`,
@@ -261,7 +261,7 @@ router.get('/programs', async (req, res) => {
   }
 });
 
-router.post('/programs', audit('create_program', 'program'), async (req, res) => {
+router.post('/programs', audit('create_program', 'program'), validate(schemas.createProgram), async (req, res) => {
   try {
     const {
       slug, name, category, subcategory, description,

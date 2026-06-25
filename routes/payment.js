@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { validate, schemas } from '../middleware/validate.js';
 
 const router = Router();
 
@@ -64,7 +65,7 @@ router.post('/validate-coupon', authenticate, async (req, res) => {
 });
 
 // POST /api/payment/create
-router.post('/create', authenticate, async (req, res) => {
+router.post('/create', authenticate, validate(schemas.paymentInit), async (req, res) => {
   try {
     const { program_id, items: reqItems, coupon_code } = req.body;
 
