@@ -46,8 +46,18 @@ async function seed() {
      ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name, password_hash=EXCLUDED.password_hash RETURNING id`,
      ['Andi Saputra', 'andi@email.com', '+6281234567890', userHash.toString(),
      'Palembang', 'Pejuang ASN dari Palembang 💪', 'SKD CPNS 2026 — Formasi Umum']
+   );
+
+  // User lindasundari
+  const lindaHash = await bcrypt.hash('linda2000', 12);
+  const lindaRes = await query(`
+    INSERT INTO users (name, email, phone, password_hash, role, plan, city, email_verified)
+     VALUES ($1,$2,$3,$4,'user','premium',$5,true)
+     ON CONFLICT (email) DO UPDATE SET name=EXCLUDED.name, password_hash=EXCLUDED.password_hash RETURNING id`,
+     ['Linda Sundari', 'lindasundari824@gmail.com', '+6281200000003', lindaHash.toString(),
+     'Jakarta']
   );
-  const userId = userRes.rows[0]?.id;
+  const lindaId = lindaRes.rows[0]?.id;
 
   // Programs
   const programs = [

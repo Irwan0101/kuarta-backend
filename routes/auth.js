@@ -314,12 +314,13 @@ router.get('/me', authenticate, async (req, res) => {
 // PUT /api/auth/profile
 router.put('/profile', authenticate, async (req, res) => {
   try {
-    const { name, phone, city, bio, target_exam } = req.body;
+    const { name, phone, city, bio, target_exam, avatar_url } = req.body;
     const result = await query(
       `UPDATE users SET name=COALESCE($1,name), phone=COALESCE($2,phone),
-       city=COALESCE($3,city), bio=COALESCE($4,bio), target_exam=COALESCE($5,target_exam)
-       WHERE id=$6 RETURNING id,name,email,phone,city,bio,target_exam,role,plan`,
-      [name, phone, city, bio, target_exam, req.user.id]
+       city=COALESCE($3,city), bio=COALESCE($4,bio), target_exam=COALESCE($5,target_exam),
+       avatar_url=COALESCE($6,avatar_url)
+       WHERE id=$7 RETURNING id,name,email,phone,city,bio,target_exam,role,plan,avatar_url`,
+      [name, phone, city, bio, target_exam, avatar_url, req.user.id]
     );
     res.json(result.rows[0]);
   } catch (err) {

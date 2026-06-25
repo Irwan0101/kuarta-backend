@@ -78,7 +78,6 @@ app.use('/api/ratings', ratingsRoutes);
 app.use('/api/certificates', certificatesRoutes);
 app.use('/api/landing', landingRoutes);
 app.use('/api/upload', uploadRoutes);
-app.use('/uploads', express.static('uploads'));
 
 app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.path} tidak ditemukan` }));
 

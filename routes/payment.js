@@ -277,6 +277,9 @@ router.post('/webhook', async (req, res) => {
         await query('UPDATE programs SET student_count=student_count+1 WHERE id=$1', [pid]);
       }
 
+      // Set user as premium after first purchase
+      await query(`UPDATE users SET plan='premium' WHERE id=$1 AND plan NOT IN ('premium','vip')`, [user_id]);
+
       const points = Math.floor(amount / 10000);
       await query('UPDATE users SET reward_points=reward_points+$1 WHERE id=$2', [points, user_id]);
 
