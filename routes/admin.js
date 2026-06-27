@@ -1374,7 +1374,8 @@ router.get('/backup', async (req, res) => {
     exec(cmd, { env, maxBuffer: 50 * 1024 * 1024, timeout: 60000 }, (err, stdout, stderr) => {
       if (err) {
         console.error('pg_dump error:', err.message, stderr);
-        return res.status(500).json({ error: 'Gagal backup database. Pastikan pg_dump terinstall.' });
+        const msg = stderr?.trim() || err.message || 'Gagal backup database';
+        return res.status(500).json({ error: msg });
       }
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       res.setHeader('Content-Type', 'application/sql');
