@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import mammoth from 'mammoth';
 import { exec } from 'child_process';
+import fs from 'fs';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { audit } from '../middleware/audit.js';
@@ -1358,13 +1359,15 @@ router.put('/users/:id/role', audit('change_role', 'user'), async (req, res) => 
 /* ── Database Backup ── */
 
 function buildPgDumpCmd() {
+  const pgDumpBin = fs.existsSync('/usr/lib/postgresql/18/bin/pg_dump')
+    ? '/usr/lib/postgresql/18/bin/pg_dump' : 'pg_dump';
   const dbUrl = process.env.DATABASE_URL;
-  if (dbUrl) return `pg_dump "${dbUrl}" --no-owner --no-acl --clean --if-exists`;
+  if (dbUrl) return `${pgDumpBin} "${dbUrl}" --no-owner --no-acl --clean --if-exists`;
   const host = process.env.DB_HOST || 'localhost';
   const port = process.env.DB_PORT || '5432';
   const db = process.env.DB_NAME || 'kuarta_db';
   const user = process.env.DB_USER || 'postgres';
-  return `pg_dump --no-owner --no-acl --clean --if-exists -h ${host} -p ${port} -U ${user} -d ${db}`;
+  return `${pgDumpBin} --no-owner --no-acl --clean --if-exists -h ${host} -p ${port} -U ${user} -d ${db}`;
 }
 
 router.get('/backup', async (req, res) => {
