@@ -513,6 +513,55 @@ router.delete('/questions/:id', async (req, res) => {
   }
 });
 
+/* ── Bank Soal (all questions with filters) ── */
+
+router.get('/questions', async (req, res) => {
+  try {
+    const { program_id, category, search, page = 1, limit = 20 } = req.query;
+    const offset = (Number(page) - 1) * Number(limit);
+    const conditions = [];
+    const params = [];
+    let idx = 1;
+
+    if (program_id) {
+      conditions.push(`tp.program_id = $${idx++}`);
+      params.push(program_id);
+    }
+    if (category) {
+      conditions.push(`q.category = $${idx++}`);
+      params.push(category);
+    }
+    if (search) {
+      conditions.push(`q.question_text ILIKE $${idx++}`);
+      params.push(`%${search}%`);
+    }
+
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+    const countResult = await query(`
+      SELECT COUNT(*) FROM questions q
+      LEFT JOIN tryout_packages tp ON tp.id = q.tryout_id
+      ${where}`, params);
+    const total = parseInt(countResult.rows[0].count);
+
+    const result = await query(`
+      SELECT q.*, tp.title as tryout_title, p.name as program_name
+      FROM questions q
+      LEFT JOIN tryout_packages tp ON tp.id = q.tryout_id
+      LEFT JOIN programs p ON p.id = tp.program_id
+      ${where}
+      ORDER BY q.created_at DESC
+      LIMIT $${idx++} OFFSET $${idx++}`,
+      [...params, Number(limit), offset]
+    );
+
+    res.json({ questions: result.rows, total, page: Number(page), limit: Number(limit) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal mengambil soal' });
+  }
+});
+
 /* ══════════════════════════════════════════════════════════════════
    LIVE CLASSES — FIX: migration tidak punya kolom is_cancelled, updated_at
 ══════════════════════════════════════════════════════════════════ */
