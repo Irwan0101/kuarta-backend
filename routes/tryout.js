@@ -53,10 +53,11 @@ router.get('/:id/questions', authenticate, async (req, res) => {
     }
 
     const result = await query(`
-      SELECT id, category, question_text, option_a, option_b, option_c, option_d, option_e, order_index, score_value
-      FROM questions
-      WHERE tryout_id=$1
-      ORDER BY order_index`,
+      SELECT q.id, q.category, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e, q.order_index, q.score_value
+      FROM questions q
+      LEFT JOIN tryout_questions tq ON tq.question_id = q.id
+      WHERE q.tryout_id=$1 OR tq.tryout_id=$1
+      ORDER BY COALESCE(tq.order_index, q.order_index)`,
       [req.params.id]
     );
 
@@ -85,8 +86,11 @@ router.post('/:id/submit', authenticate, async (req, res) => {
     if (!toRes.rows.length) return res.status(404).json({ error: 'Tryout tidak ditemukan' });
     const to = toRes.rows[0];
 
-    const questRes = await query(
-      'SELECT id, category, correct_answer, score_value FROM questions WHERE tryout_id=$1',
+    const questRes = await query(`
+      SELECT q.id, q.category, q.correct_answer, q.score_value
+      FROM questions q
+      LEFT JOIN tryout_questions tq ON tq.question_id = q.id
+      WHERE q.tryout_id=$1 OR tq.tryout_id=$1`,
       [req.params.id]
     );
     const questions = questRes.rows;

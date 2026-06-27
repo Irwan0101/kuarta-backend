@@ -497,6 +497,14 @@ const migrations = [
   )
   WHERE section_key='hero' AND content->'stats' IS NOT NULL
     AND content->'stats'->0->>'target' IS NULL`,
+
+  // ─── BANK SOAL: tryout_questions junction ─────────────────
+  `CREATE TABLE IF NOT EXISTS tryout_questions (
+    tryout_id   UUID REFERENCES tryout_packages(id) ON DELETE CASCADE,
+    question_id UUID REFERENCES questions(id) ON DELETE CASCADE,
+    order_index INT DEFAULT 0,
+    PRIMARY KEY (tryout_id, question_id)
+  )`,
 ];
 
 async function migrate() {

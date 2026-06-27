@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
+import multer from 'multer';
+import mammoth from 'mammoth';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { audit } from '../middleware/audit.js';
@@ -7,6 +9,7 @@ import { validate, schemas } from '../middleware/validate.js';
 
 const router = Router();
 router.use(authenticate, requireAdmin);
+const upload = multer({ storage: multer.memoryStorage() });
 
 /* ══════════════════════════════════════════════════════════════════
    STATS
@@ -559,6 +562,155 @@ router.get('/questions', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Gagal mengambil soal' });
+  }
+});
+
+/* ── Bank Soal Import ── */
+
+router.post('/questions/import', async (req, res) => {
+  try {
+    const { questions } = req.body;
+    if (!Array.isArray(questions) || !questions.length) {
+      return res.status(400).json({ error: 'Tidak ada soal untuk diimport' });
+    }
+    const imported = [];
+    for (const q of questions) {
+      if (!q.question_text || !q.option_a || !q.option_b || !q.option_c || !q.option_d || !q.correct_answer) continue;
+      const result = await query(`
+        INSERT INTO questions (question_text, option_a, option_b, option_c, option_d, option_e,
+          correct_answer, explanation, category, difficulty)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e || null,
+         q.correct_answer, q.explanation || null, q.category || 'TIU', q.difficulty || 'medium']
+      );
+      imported.push(result.rows[0]);
+    }
+    res.status(201).json({ imported: imported.length, questions: imported });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal import soal' });
+  }
+});
+
+/* ── Import .docx ── */
+
+function parseDocxQuestions(text) {
+  const questions = [];
+  const blocks = text.split(/\n\s*(?:Soal|Nomor)\s*\d+\s*[:.]?\s*/i).filter(b => b.trim());
+  for (const block of blocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    let question_text = '', option_a = '', option_b = '', option_c = '', option_d = '', option_e = '';
+    let correct_answer = '', explanation = '', category = 'TIU';
+    let capture = 'question';
+    for (const line of lines) {
+      const optMatch = line.match(/^([A-E])[.．)]\s*(.*)/);
+      if (optMatch) {
+        const opt = optMatch[1].toLowerCase();
+        const val = optMatch[2];
+        if (opt === 'a') { option_a = val; capture = 'options'; }
+        else if (opt === 'b') option_b = val;
+        else if (opt === 'c') option_c = val;
+        else if (opt === 'd') option_d = val;
+        else if (opt === 'e') option_e = val;
+      } else if (/^jawaban\s*[:：]/i.test(line)) {
+        correct_answer = line.replace(/^jawaban\s*[:：]\s*/i, '').trim().toLowerCase().charAt(0);
+      } else if (/^kategori\s*[:：]/i.test(line)) {
+        category = line.replace(/^kategori\s*[:：]\s*/i, '').trim().toUpperCase();
+        if (!['TWK','TIU','TKP','PU','PM','LBI','LBE','PBM'].includes(category)) category = 'TIU';
+      } else if (/^pembahasan\s*[:：]/i.test(line)) {
+        explanation = line.replace(/^pembahasan\s*[:：]\s*/i, '').trim();
+      } else if (capture === 'question') {
+        question_text += (question_text ? ' ' : '') + line;
+      }
+    }
+    if (question_text && option_a && option_b && option_c && option_d && correct_answer) {
+      questions.push({ question_text, option_a, option_b, option_c, option_d, option_e, correct_answer, explanation, category });
+    }
+  }
+  return questions;
+}
+
+router.post('/questions/import/docx', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Upload file .docx' });
+    const result = await mammoth.extractRawText({ buffer: req.file.buffer });
+    const questions = parseDocxQuestions(result.value);
+    if (!questions.length) return res.status(400).json({ error: 'Tidak ditemukan soal dalam format yang sesuai' });
+    const imported = [];
+    for (const q of questions) {
+      const r = await query(`
+        INSERT INTO questions (question_text, option_a, option_b, option_c, option_d, option_e,
+          correct_answer, explanation, category, difficulty)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e || null,
+         q.correct_answer, q.explanation || null, q.category || 'TIU', 'medium']
+      );
+      imported.push(r.rows[0]);
+    }
+    res.json({ imported: imported.length, questions: imported });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal import file' });
+  }
+});
+
+/* ── Assign Bank Questions to Tryout ── */
+
+router.post('/tryouts/:id/questions/link', async (req, res) => {
+  try {
+    const { question_ids } = req.body;
+    if (!Array.isArray(question_ids) || !question_ids.length) {
+      return res.status(400).json({ error: 'Pilih soal yang akan ditambahkan' });
+    }
+    let added = 0;
+    for (const qid of question_ids) {
+      const existing = await query('SELECT 1 FROM tryout_questions WHERE tryout_id=$1 AND question_id=$2', [req.params.id, qid]);
+      if (existing.rows.length) continue;
+      await query('INSERT INTO tryout_questions (tryout_id, question_id) VALUES ($1,$2)', [req.params.id, qid]);
+      added++;
+    }
+    // Also update tryout_packages.question_count
+    const cnt = await query('SELECT COUNT(*) FROM tryout_questions WHERE tryout_id=$1', [req.params.id]);
+    await query('UPDATE tryout_packages SET question_count=$1 WHERE id=$2', [cnt.rows[0].count, req.params.id]);
+    res.json({ added, total: Number(cnt.rows[0].count) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal menambahkan soal' });
+  }
+});
+
+router.delete('/tryouts/:id/questions/link', async (req, res) => {
+  try {
+    const { question_ids } = req.body;
+    if (!Array.isArray(question_ids) || !question_ids.length) {
+      return res.status(400).json({ error: 'Pilih soal yang akan dihapus' });
+    }
+    const result = await query(
+      'DELETE FROM tryout_questions WHERE tryout_id=$1 AND question_id=ANY($2::uuid[])',
+      [req.params.id, question_ids]
+    );
+    // Update tryout_packages.question_count
+    const cnt = await query('SELECT COUNT(*) FROM tryout_questions WHERE tryout_id=$1', [req.params.id]);
+    await query('UPDATE tryout_packages SET question_count=$1 WHERE id=$2', [cnt.rows[0].count, req.params.id]);
+    res.json({ deleted: result.rowCount, total: Number(cnt.rows[0].count) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal menghapus soal' });
+  }
+});
+
+router.get('/tryouts/:id/question-links', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT q.id, q.question_text, q.category, q.correct_answer, q.difficulty, tq.order_index
+      FROM tryout_questions tq
+      JOIN questions q ON q.id = tq.question_id
+      WHERE tq.tryout_id=$1
+      ORDER BY tq.order_index`, [req.params.id]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal memuat soal' });
   }
 });
 
