@@ -2,6 +2,7 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import mammoth from 'mammoth';
+import { exec } from 'child_process';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { audit } from '../middleware/audit.js';
@@ -1351,6 +1352,38 @@ router.put('/users/:id/role', audit('change_role', 'user'), async (req, res) => 
     res.json(result.rows[0]);
   } catch (err) {
     res.status(500).json({ error: 'Gagal mengubah role user' });
+  }
+});
+
+/* ── Database Backup ── */
+
+function buildPgDumpCmd() {
+  const dbUrl = process.env.DATABASE_URL;
+  if (dbUrl) return `pg_dump "${dbUrl}" --no-owner --no-acl --clean --if-exists`;
+  const host = process.env.DB_HOST || 'localhost';
+  const port = process.env.DB_PORT || '5432';
+  const db = process.env.DB_NAME || 'kuarta_db';
+  const user = process.env.DB_USER || 'postgres';
+  return `pg_dump --no-owner --no-acl --clean --if-exists -h ${host} -p ${port} -U ${user} -d ${db}`;
+}
+
+router.get('/backup', async (req, res) => {
+  try {
+    const cmd = buildPgDumpCmd();
+    const env = { ...process.env, PGPASSWORD: process.env.DB_PASSWORD || '' };
+    exec(cmd, { env, maxBuffer: 50 * 1024 * 1024, timeout: 60000 }, (err, stdout, stderr) => {
+      if (err) {
+        console.error('pg_dump error:', err.message, stderr);
+        return res.status(500).json({ error: 'Gagal backup database. Pastikan pg_dump terinstall.' });
+      }
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      res.setHeader('Content-Type', 'application/sql');
+      res.setHeader('Content-Disposition', `attachment; filename="kuarta_backup_${timestamp}.sql"`);
+      res.send(stdout);
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal backup database' });
   }
 });
 
