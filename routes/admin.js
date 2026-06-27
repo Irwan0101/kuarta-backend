@@ -4,6 +4,7 @@ import multer from 'multer';
 import mammoth from 'mammoth';
 import { exec } from 'child_process';
 import fs from 'fs';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, Table, TableRow, TableCell, WidthType, AlignmentType, BorderStyle } from 'docx';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { audit } from '../middleware/audit.js';
@@ -1388,6 +1389,103 @@ router.get('/backup', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Gagal backup database' });
+  }
+});
+
+/* ── Download .docx Template ── */
+
+router.get('/questions/template/docx', async (req, res) => {
+  try {
+    const example = [
+      {
+        no: 1, question: 'Bentuk sederhana dari (2³ × 2⁴) / 2⁵ adalah...',
+        a: '2', b: '4', c: '8', d: '16', e: '32',
+        answer: 'B', category: 'TIU', explanation: '2³ × 2⁴ = 2⁷, dibagi 2⁵ = 2² = 4',
+      },
+      {
+        no: 2, question: 'Pancasila sebagai dasar negara tercantum dalam...',
+        a: 'Piagam Jakarta', b: 'Pembukaan UUD 1945', c: 'Pasal 1 UUD 1945',
+        d: 'Ketetapan MPR', e: 'Dekrit Presiden',
+        answer: 'B', category: 'TWK',
+        explanation: 'Pancasila secara resmi tercantum dalam Pembukaan UUD 1945 alinea ke-4',
+      },
+    ];
+
+    const rows = [
+      new TableRow({
+        tableHeader: true,
+        children: ['No','Soal','A','B','C','D','E','Jawaban','Kategori','Pembahasan'].map(h =>
+          new TableCell({
+            width: { size: h === 'Pembahasan' ? 30 : h === 'Soal' ? 25 : 10, type: WidthType.PERCENTAGE },
+            children: [new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [new TextRun({ text: h, bold: true, size: 18, font: 'Calibri' })]
+            })],
+            shading: { fill: 'E8E8E8' },
+          })
+        ),
+      }),
+      ...example.map(e =>
+        new TableRow({
+          children: [e.no, e.question, e.a, e.b, e.c, e.d, e.e, e.answer, e.category, e.explanation].map((v, ci) =>
+            new TableCell({
+              width: { size: ci === 9 ? 30 : ci === 1 ? 25 : 10, type: WidthType.PERCENTAGE },
+              children: [new Paragraph({
+                spacing: { before: 40, after: 40 },
+                children: [new TextRun({ text: String(v), size: 18, font: 'Calibri' })]
+              })]
+            })
+          ),
+        })
+      ),
+    ];
+
+    const doc = new Document({
+      creator: 'Kuarta Bimbel',
+      title: 'Template Bank Soal',
+      styles: { default: { document: { run: { font: 'Calibri', size: 22 } } } },
+      sections: [{
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            spacing: { after: 200 },
+            children: [new TextRun({ text: 'TEMPLATE BANK SOAL KUARTA', bold: true, size: 28, font: 'Calibri' })],
+          }),
+          new Paragraph({
+            spacing: { after: 100 },
+            children: [new TextRun({ text: 'Isi sesuai format di bawah. Baris "Soal 1:", "Jawaban:", "Kategori:", "Pembahasan:" bersifat opsional tapi dianjurkan.', size: 20, font: 'Calibri', color: '666666' })],
+          }),
+          new Paragraph({
+            spacing: { after: 400 },
+            children: [new TextRun({ text: 'Format alternatif — tulis langsung seperti contoh:', size: 20, font: 'Calibri', bold: true }),
+                       new TextRun({ text: '\nSoal 1:\nTeks soal...\nA. Opsi A\nB. Opsi B\nC. Opsi C\nD. Opsi D\nE. Opsi E\nJawaban: A\nKategori: TIU\nPembahasan: Penjelasan...', size: 20, font: 'Consolas', color: '333333' })],
+          }),
+          new Paragraph({
+            spacing: { before: 200, after: 100 },
+            children: [new TextRun({ text: 'Contoh data (tabel):', bold: true, size: 22, font: 'Calibri' })],
+          }),
+          new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } }),
+          new Paragraph({
+            spacing: { before: 400 },
+            children: [new TextRun({ text: 'Kategori yang tersedia: ', bold: true, size: 20, font: 'Calibri' }),
+                       new TextRun({ text: 'TWK, TIU, TKP, PU, PM, LBI, LBE, PBM', size: 20, font: 'Calibri' })],
+          }),
+          new Paragraph({
+            spacing: { before: 100 },
+            children: [new TextRun({ text: 'Jawaban: ', bold: true, size: 20, font: 'Calibri' }),
+                       new TextRun({ text: 'A / B / C / D / E', size: 20, font: 'Calibri' })],
+          }),
+        ],
+      }],
+    });
+
+    const buffer = await Packer.toBuffer(doc);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', 'attachment; filename="template_bank_soal_kuarta.docx"');
+    res.send(buffer);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal generate template' });
   }
 });
 
