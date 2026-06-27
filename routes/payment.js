@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { query } from '../db/pool.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { validate, schemas } from '../middleware/validate.js';
+import { sendReceiptEmail } from '../lib/email.js';
 
 const router = Router();
 
@@ -252,12 +253,12 @@ router.post('/webhook', async (req, res) => {
       SET status=$1, payment_method=$2, midtrans_response=$3::jsonb,
           paid_at=CASE WHEN $1='success' THEN NOW() ELSE NULL END
       WHERE order_id=$4 AND status NOT IN ('success','refund')
-      RETURNING user_id, program_id, amount, items, status as old_status`,
+      RETURNING user_id, program_id, amount, items, service_fee, discount, gross_amount, status as old_status`,
       [newStatus, payment_type || 'unknown', JSON.stringify(statusResponse), orderId]
     );
 
     if (newStatus === 'success' && txResult.rows.length) {
-      const { user_id, program_id, amount, items: txItems } = txResult.rows[0];
+      const { user_id, program_id, amount, items: txItems, service_fee, discount, gross_amount } = txResult.rows[0];
 
       // Handle multi-item enrollment
       let programIds = [];
@@ -296,6 +297,30 @@ router.post('/webhook', async (req, res) => {
         [user_id, 'Pembayaran Berhasil! ✅',
          names ? `Program ${names} sudah aktif. Mulai belajar sekarang!` : 'Pembayaran berhasil.']
       );
+
+      // Send receipt email
+      try {
+        const userRes = await query('SELECT name, email FROM users WHERE id=$1', [user_id]);
+        const user = userRes.rows[0];
+        if (user?.email) {
+          const progPrices = await query('SELECT id, name, price, duration_months FROM programs WHERE id = ANY($1::uuid[])', [programIds]);
+          const paidAt = new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+          await sendReceiptEmail({
+            name: user.name,
+            email: user.email,
+            orderId,
+            programs: progPrices.rows,
+            amount,
+            serviceFee: service_fee || 0,
+            discount: discount || 0,
+            total: gross_amount || amount,
+            paidAt,
+            paymentMethod: payment_type,
+          });
+        }
+      } catch (emailErr) {
+        console.error('Gagal kirim email receipt:', emailErr.message);
+      }
     }
 
     res.json({ status: 'ok' });
