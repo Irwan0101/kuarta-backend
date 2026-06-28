@@ -505,6 +505,22 @@ const migrations = [
     order_index INT DEFAULT 0,
     PRIMARY KEY (tryout_id, question_id)
   )`,
+
+  // ─── VISITOR TRACKING ─────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS tracked_visits (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    page          VARCHAR(255) NOT NULL,
+    referrer      VARCHAR(500),
+    user_agent    TEXT,
+    ip_address    VARCHAR(45),
+    device_type   VARCHAR(20) DEFAULT 'desktop',
+    user_id       UUID REFERENCES users(id) ON DELETE SET NULL,
+    session_id    VARCHAR(100),
+    duration_sec  INT DEFAULT 0,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_visits_created ON tracked_visits(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_visits_page ON tracked_visits(page)`,
 ];
 
 async function migrate() {

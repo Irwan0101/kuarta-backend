@@ -21,6 +21,7 @@ import certificatesRoutes from './routes/certificates.js';
 import landingRoutes from './routes/landing.js';
 import uploadRoutes from './routes/upload.js';
 import securityRoutes from './routes/security.js';
+import analyticsRoutes from './routes/analytics.js';
 
 dotenv.config();
 
@@ -94,6 +95,7 @@ app.use('/api/certificates', certificatesRoutes);
 app.use('/api/landing', landingRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/admin', securityRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.path} tidak ditemukan` }));
 
