@@ -440,9 +440,11 @@ router.delete('/tryouts/:id', async (req, res) => {
 router.get('/tryouts/:id/questions', async (req, res) => {
   try {
     const result = await query(`
-      SELECT * FROM questions
-      WHERE tryout_id = $1
-      ORDER BY order_index ASC, created_at ASC`,
+      SELECT q.*
+      FROM questions q
+      LEFT JOIN tryout_questions tq ON tq.question_id = q.id
+      WHERE q.tryout_id = $1 OR tq.tryout_id = $1
+      ORDER BY COALESCE(tq.order_index, q.order_index), q.created_at`,
       [req.params.id]
     );
     res.json(result.rows);
