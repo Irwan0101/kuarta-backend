@@ -70,7 +70,7 @@ export const schemas = {
     name: z.string().min(2).max(100),
     email: z.string().email(),
     password: z.string().min(6).max(100),
-    role: z.enum(['user', 'admin']).optional(),
+    role: z.enum(['user', 'admin', 'mentor']).optional(),
     plan: z.enum(['free', 'premium', 'vip']).optional(),
   }),
 };
