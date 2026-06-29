@@ -472,7 +472,9 @@ const migrations = [
     ('footer', '', '© 2026 Kuarta. All rights reserved.',
       '{"links":[{"label":"Tentang","url":""},{"label":"Program","url":""},{"label":"Blog","url":""},{"label":"Kontak","url":""},{"label":"Privasi","url":""}]}'),
     ('ticker', '', '',
-      '{"items":["CPNS 2025","UTBK SNBT","Olimpiade OSN","Bimbel SD SMP SMA","Persiapan Karier","Live Class Rutin","Tryout Akurat","Kuarta"]}')
+      '{"items":["CPNS 2025","UTBK SNBT","Olimpiade OSN","Bimbel SD SMP SMA","Persiapan Karier","Live Class Rutin","Tryout Akurat","Kuarta"]}'),
+    ('programs', 'Pilih Program', 'Sesuai Tujuanmu',
+      '{"badge_text":"PROGRAM UNGGULAN","show_price":true,"items":[]}')
   ON CONFLICT (section_key) DO NOTHING`,
 
   // ─── SEED DEFAULT ADMIN SETTINGS ─────────────────────────────────
