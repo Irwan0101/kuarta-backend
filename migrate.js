@@ -482,6 +482,37 @@ const migrations = [
     ('wa_number', '{"number":"6281234567890"}')
   ON CONFLICT (key) DO NOTHING`,
 
+  // ─── SEED DEFAULT PROGRAMS ────────────────────────────────────────
+  `INSERT INTO programs (slug,name,category,price,duration_months,icon,bg_gradient,badge_label,badge_type,video_count,pdf_count,tryout_count,is_active,rating,student_count,review_count) VALUES
+    ('bimbel-sd','Bimbel SD','sekolah',350000,3,'📗','linear-gradient(135deg,#1e3a5f,#0f2027)','Populer','popular',80,40,0,true,4.9,2500,180),
+    ('bimbel-smp','Bimbel SMP','sekolah',450000,4,'📘','linear-gradient(135deg,#1a2a4a,#0a1628)','Baru','new',120,60,0,true,4.8,1800,120),
+    ('bimbel-sma','Bimbel SMA','sekolah',550000,6,'📙','linear-gradient(135deg,#1f1535,#0e0a1f)',NULL,NULL,200,90,0,true,4.8,3200,210),
+    ('utbk-snbt','UTBK — SNBT','universitas',850000,6,'🎯','linear-gradient(135deg,#3b1f1f,#1f0f0f)','Hot','hot',180,0,50,true,4.9,5800,340),
+    ('skd-cpns','SKD CPNS — Kedinasan','cpns',900000,3,'🏛️','linear-gradient(135deg,#1a2a4a,#0d1a30)','Terlaris','popular',150,0,30,true,4.9,9200,510),
+    ('persiapan-karier','Persiapan Karier','karier',300000,2,'💼','linear-gradient(135deg,#0f2e2e,#061a1a)',NULL,NULL,90,0,0,true,4.7,1200,80),
+    ('english-master','English Master','bahasa',500000,4,'🌐','linear-gradient(135deg,#1a2a1a,#0a1a0a)','Baru','new',110,0,0,true,4.8,1600,95),
+    ('persiapan-osn','Persiapan OSN','olimpiade',600000,6,'🏆','linear-gradient(135deg,#2a1a3a,#1a0f2a)','Prestisius','hot',160,0,0,true,4.9,950,65)
+  ON CONFLICT (slug) DO NOTHING`,
+
+  // ─── SEED DEFAULT BANNERS ─────────────────────────────────────────
+  `DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM landing_banners LIMIT 1) THEN
+        INSERT INTO landing_banners (image_url,title,subtitle,cta_text,cta_link,badge_text,order_index) VALUES
+          (NULL,'Mulai Perjalanan Belajarmu','Daftar sekarang dan dapatkan akses gratis ke semua materi dasar','Daftar Gratis','/register','GRATIS',0),
+          (NULL,'Tryout Akurat & Terpercaya','Simulasi soal mirip asli dengan pembahasan lengkap','Coba Tryout','/tryout','TRYOUT',1);
+      END IF;
+    END $$`,
+
+  // ─── SEED DEFAULT PROMOTIONS ──────────────────────────────────────
+  `DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM landing_promotions LIMIT 1) THEN
+        INSERT INTO landing_promotions (title,description,discount_text,coupon_code,bg_color) VALUES
+          ('Diskon Spesial!','Dapatkan potongan 20% untuk semua program dengan kode promo di bawah ini','Potongan 20%','KUARTA20','#FF6B00');
+      END IF;
+    END $$`,
+
   // ─── UPDATE EXISTING HERO CONTENT WITH DESCRIPTION FIELD ───────────
   `UPDATE landing_sections SET content = content || '{"description":"Platform belajar online lengkap untuk CPNS, UTBK, Olimpiade, dan bimbel sekolah. Video HD, tryout akurat, dan live class bersama mentor terbaik."}'::jsonb
    WHERE section_key='hero' AND (content->>'description' IS NULL OR content->>'description' = '')`,
