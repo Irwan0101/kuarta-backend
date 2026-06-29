@@ -39,8 +39,8 @@ router.get('/programs', async (req, res) => {
       result = await query(
         `SELECT id, slug, name, category, icon, bg_gradient, price, duration_months,
                 video_count, tryout_count, rating, badge_label, badge_type
-         FROM programs WHERE is_active=true AND id = ANY($1)
-         ORDER BY array_position($1, id)`,
+         FROM programs WHERE is_active=true AND id = ANY($1::uuid[])
+         ORDER BY array_position($1::uuid[], id)`,
         [selectedIds]
       );
     } else {
