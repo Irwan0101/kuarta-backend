@@ -29,6 +29,26 @@ router.get('/promotions', async (req, res) => {
   }
 });
 
+router.get('/programs', async (req, res) => {
+  try {
+    const sec = await query(`SELECT content FROM landing_sections WHERE section_key='programs' AND is_active=true LIMIT 1`);
+    const content = sec.rows[0]?.content || {};
+    const selectedIds = content.selected_ids || [];
+    if (selectedIds.length === 0) return res.json([]);
+    const result = await query(
+      `SELECT id, slug, name, category, icon, bg_gradient, price, duration_months,
+              video_count, tryout_count, rating, badge_label, badge_type
+       FROM programs WHERE is_active=true AND id = ANY($1)
+       ORDER BY array_position($1, id)`,
+      [selectedIds]
+    );
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal memuat program' });
+  }
+});
+
 router.get('/sections', async (req, res) => {
   try {
     const result = await query(`SELECT * FROM landing_sections WHERE is_active=true`);
