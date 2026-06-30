@@ -15,8 +15,8 @@ const pool = new Pool({
   password: process.env.DATABASE_URL ? undefined : process.env.DB_PASSWORD,
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-  ssl: isProduction ? { rejectUnauthorized: true } : false,
+  connectionTimeoutMillis: 10000,
+  ssl: isProduction ? { rejectUnauthorized: false } : false,
 });
 
 pool.on('error', (err) => {
