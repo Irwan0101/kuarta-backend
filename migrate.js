@@ -479,7 +479,8 @@ const migrations = [
 
   // ─── SEED DEFAULT ADMIN SETTINGS ─────────────────────────────────
   `INSERT INTO admin_settings (key, value) VALUES
-    ('wa_number', '{"number":"6281234567890"}')
+    ('wa_number', '{"number":"6281234567890"}'),
+    ('payment_config', '{"service_fee":0,"payment_methods":[{"id":"bank","label":"Transfer Bank","icon":"🏦"},{"id":"gopay","label":"GoPay","icon":"💚"},{"id":"ovo","label":"OVO","icon":"💜"},{"id":"dana","label":"DANA","icon":"🔵"},{"id":"qris","label":"QRIS","icon":"🟡"},{"id":"cc","label":"Kartu Kredit","icon":"💳"}],"banks":["BCA","Mandiri","BRI","BNI","BSI"]}')
   ON CONFLICT (key) DO NOTHING`,
 
   // ─── SEED DEFAULT PROGRAMS ────────────────────────────────────────

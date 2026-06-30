@@ -99,6 +99,16 @@ router.get('/:slug', optionalAuth, async (req, res) => {
   }
 });
 
+router.get('/categories', async (req, res) => {
+  try {
+    const r = await query('SELECT DISTINCT category FROM programs WHERE is_active=true ORDER BY category');
+    res.json(r.rows.map(row => row.category));
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Gagal memuat kategori' });
+  }
+});
+
 // GET /api/programs/user/enrolled
 router.get('/user/enrolled', authenticate, async (req, res) => {
   try {

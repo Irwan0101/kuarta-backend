@@ -22,19 +22,7 @@ import landingRoutes from './routes/landing.js';
 import uploadRoutes from './routes/upload.js';
 import securityRoutes from './routes/security.js';
 import analyticsRoutes from './routes/analytics.js';
-
-dotenv.config();
-
-const app = express();
-const PORT = process.env.PORT || 5000;
-
-const REQUIRED_ENV = ['JWT_SECRET', 'MIDTRANS_SERVER_KEY', 'MIDTRANS_CLIENT_KEY'];
-for (const key of REQUIRED_ENV) {
-  if (!process.env[key]) {
-    console.error(`Missing required env: ${key}`);
-    process.exit(1);
-  }
-}
+import settingsRoutes from './routes/settings.js';
 
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -96,6 +84,7 @@ app.use('/api/landing', landingRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/admin', securityRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/settings', settingsRoutes);
 
 app.use((req, res) => res.status(404).json({ error: `Route ${req.method} ${req.path} tidak ditemukan` }));
 

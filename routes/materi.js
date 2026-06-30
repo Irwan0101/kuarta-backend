@@ -17,7 +17,7 @@ router.get('/programs/:id/modules', authenticate, async (req, res) => {
       SELECT m.id, m.title, m.icon, m.order_index,
         json_agg(json_build_object(
           'id', l.id, 'title', l.title, 'type', l.type,
-          'duration_secs', l.duration_secs, 'order_index', l.order_index,
+          'duration_mins', l.duration_mins, 'order_index', l.order_index,
           'completed', COALESCE(lp.completed, false),
           'watch_seconds', COALESCE(lp.watch_seconds, 0)
         ) ORDER BY l.order_index ASC) FILTER (WHERE l.id IS NOT NULL) AS lessons
@@ -87,6 +87,10 @@ router.post('/lessons/:id/progress', authenticate, async (req, res) => {
       RETURNING *`,
       [req.user.id, req.params.id, lesson.rows[0].program_id, completed || false, watch_seconds || 0]
     );
+
+    if (completed) {
+      await query('UPDATE users SET reward_points = reward_points + 10 WHERE id=$1', [req.user.id]);
+    }
 
     res.json(result.rows[0]);
   } catch (err) {
