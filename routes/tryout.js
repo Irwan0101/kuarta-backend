@@ -52,17 +52,34 @@ router.get('/:id/questions', authenticate, async (req, res) => {
       return res.status(403).json({ error: 'Kamu belum terdaftar di program ini' });
     }
 
-    const result = await query(`
-      SELECT q.id, q.category, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e,
-             q.order_index, q.score_value, q.time_limit_secs, q.group_id,
-             qg.stimulus as group_stimulus
-      FROM questions q
-      LEFT JOIN tryout_questions tq ON tq.question_id = q.id
-      LEFT JOIN question_groups qg ON qg.id = q.group_id
-      WHERE q.tryout_id=$1 OR tq.tryout_id=$1
-      ORDER BY COALESCE(tq.order_index, q.order_index)`,
-      [req.params.id]
-    );
+    let result;
+    try {
+      result = await query(`
+        SELECT q.id, q.category, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e,
+               q.order_index, q.score_value, q.time_limit_secs, q.group_id,
+               qg.stimulus as group_stimulus
+        FROM questions q
+        LEFT JOIN tryout_questions tq ON tq.question_id = q.id
+        LEFT JOIN question_groups qg ON qg.id = q.group_id
+        WHERE q.tryout_id=$1 OR tq.tryout_id=$1
+        ORDER BY COALESCE(tq.order_index, q.order_index)`,
+        [req.params.id]
+      );
+    } catch (e) {
+      if (e.message?.includes('relation "question_groups" does not exist')) {
+        result = await query(`
+          SELECT q.id, q.category, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e,
+                 q.order_index, q.score_value
+          FROM questions q
+          LEFT JOIN tryout_questions tq ON tq.question_id = q.id
+          WHERE q.tryout_id=$1 OR tq.tryout_id=$1
+          ORDER BY COALESCE(tq.order_index, q.order_index)`,
+          [req.params.id]
+        );
+      } else {
+        throw e;
+      }
+    }
 
     res.json({
       tryout: {

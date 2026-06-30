@@ -559,18 +559,37 @@ router.get('/questions', async (req, res) => {
       ${where}`, params);
     const total = parseInt(countResult.rows[0].count);
 
-    const result = await query(`
-      SELECT q.*, tp.title as tryout_title, p.name as program_name,
-        qg.title as group_title
-      FROM questions q
-      LEFT JOIN tryout_packages tp ON tp.id = q.tryout_id
-      LEFT JOIN programs p ON p.id = tp.program_id
-      LEFT JOIN question_groups qg ON qg.id = q.group_id
-      ${where}
-      ORDER BY q.created_at DESC
-      LIMIT $${idx++} OFFSET $${idx++}`,
-      [...params, Number(limit), offset]
-    );
+    let result;
+    try {
+      result = await query(`
+        SELECT q.*, tp.title as tryout_title, p.name as program_name,
+          qg.title as group_title
+        FROM questions q
+        LEFT JOIN tryout_packages tp ON tp.id = q.tryout_id
+        LEFT JOIN programs p ON p.id = tp.program_id
+        LEFT JOIN question_groups qg ON qg.id = q.group_id
+        ${where}
+        ORDER BY q.created_at DESC
+        LIMIT $${idx++} OFFSET $${idx++}`,
+        [...params, Number(limit), offset]
+      );
+    } catch (e) {
+      if (e.message?.includes('relation "question_groups" does not exist')) {
+        idx = params.length + 1;
+        result = await query(`
+          SELECT q.*, tp.title as tryout_title, p.name as program_name
+          FROM questions q
+          LEFT JOIN tryout_packages tp ON tp.id = q.tryout_id
+          LEFT JOIN programs p ON p.id = tp.program_id
+          ${where}
+          ORDER BY q.created_at DESC
+          LIMIT $${idx++} OFFSET $${idx++}`,
+          [...params, Number(limit), offset]
+        );
+      } else {
+        throw e;
+      }
+    }
 
     res.json({ questions: result.rows, total, page: Number(page), limit: Number(limit) });
   } catch (err) {
