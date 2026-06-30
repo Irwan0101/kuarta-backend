@@ -30,6 +30,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
+  crossOriginOpenerPolicy: false,
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
