@@ -24,7 +24,10 @@ import securityRoutes from './routes/security.js';
 import analyticsRoutes from './routes/analytics.js';
 import settingsRoutes from './routes/settings.js';
 
+dotenv.config();
+
 const app = express();
+const PORT = process.env.PORT || 3001;
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: {
