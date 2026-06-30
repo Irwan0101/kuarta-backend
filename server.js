@@ -56,8 +56,8 @@ app.use(cors({
 
 app.use(morgan('short'));
 
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Terlalu banyak percobaan login. Coba lagi nanti.' }, validate: { xForwardedForHeader: false } });
-const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { error: 'Terlalu banyak permintaan OTP. Coba lagi nanti.' }, validate: { xForwardedForHeader: false } });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Terlalu banyak percobaan login. Coba lagi nanti.' } });
+const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { error: 'Terlalu banyak permintaan OTP. Coba lagi nanti.' } });
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5 }));
 app.use('/api/auth/forgot-password', otpLimiter);
