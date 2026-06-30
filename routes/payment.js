@@ -211,6 +211,64 @@ router.post('/create', authenticate, validate(schemas.paymentInit), async (req, 
   }
 });
 
+/* ─── Shared payment success handler ──────────────────────────── */
+async function handlePaymentSuccess(orderId, { user_id, program_id, amount, items: txItems, service_fee, discount, gross_amount, payment_type } = {}) {
+  let tx;
+  if (!user_id) {
+    tx = await query('SELECT * FROM transactions WHERE order_id=$1', [orderId]);
+    if (!tx.rows.length) return;
+    ({ user_id, program_id, amount, items: txItems, service_fee, discount, gross_amount } = tx.rows[0]);
+  }
+
+  let programIds = [];
+  if (txItems && Array.isArray(txItems) && txItems.length > 0) {
+    programIds = txItems.map(i => i.program_id);
+  } else if (program_id) {
+    programIds = [program_id];
+  }
+
+  for (const pid of programIds) {
+    await query(`
+      INSERT INTO user_programs (user_id, program_id, expires_at)
+      VALUES ($1,$2,NOW()+INTERVAL '1 month' * (SELECT duration_months FROM programs WHERE id=$2))
+      ON CONFLICT (user_id, program_id) DO UPDATE SET is_active=true, expires_at=EXCLUDED.expires_at`,
+      [user_id, pid]
+    );
+    await query('UPDATE programs SET student_count=student_count+1 WHERE id=$1', [pid]);
+  }
+
+  await query(`UPDATE users SET plan='premium' WHERE id=$1 AND plan NOT IN ('premium','vip')`, [user_id]);
+  const points = Math.floor((amount || 0) / 10000);
+  await query('UPDATE users SET reward_points=reward_points+$1 WHERE id=$2', [points, user_id]);
+
+  const progNames = await query(`SELECT name FROM programs WHERE id = ANY($1::uuid[])`, [programIds]);
+  const names = progNames.rows.map(r => r.name).join(', ');
+  await query(`
+    INSERT INTO notifications (user_id, title, message, type)
+    VALUES ($1,$2,$3,'success')`,
+    [user_id, 'Pembayaran Berhasil! ✅',
+     names ? `Program ${names} sudah aktif. Mulai belajar sekarang!` : 'Pembayaran berhasil.']
+  );
+
+  try {
+    const userRes = await query('SELECT name, email FROM users WHERE id=$1', [user_id]);
+    const user = userRes.rows[0];
+    if (user?.email) {
+      const progPrices = await query('SELECT id, name, price, duration_months FROM programs WHERE id = ANY($1::uuid[])', [programIds]);
+      const paidAt = new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      await sendReceiptEmail({
+        name: user.name, email: user.email, orderId,
+        programs: progPrices.rows, amount: amount || 0,
+        serviceFee: service_fee || 0, discount: discount || 0,
+        total: gross_amount || amount || 0, paidAt,
+        paymentMethod: payment_type || 'Midtrans',
+      });
+    }
+  } catch (emailErr) {
+    console.error('Gagal kirim email receipt:', emailErr.message);
+  }
+}
+
 // POST /api/payment/webhook
 router.post('/webhook', async (req, res) => {
   try {
@@ -260,67 +318,7 @@ router.post('/webhook', async (req, res) => {
     if (newStatus === 'success' && txResult.rows.length) {
       const { user_id, program_id, amount, items: txItems, service_fee, discount, gross_amount } = txResult.rows[0];
 
-      // Handle multi-item enrollment
-      let programIds = [];
-      if (txItems && Array.isArray(txItems) && txItems.length > 0) {
-        programIds = txItems.map(i => i.program_id);
-      } else if (program_id) {
-        programIds = [program_id];
-      }
-
-      for (const pid of programIds) {
-        await query(`
-          INSERT INTO user_programs (user_id, program_id, expires_at)
-          VALUES ($1,$2,NOW()+INTERVAL '1 month' * (SELECT duration_months FROM programs WHERE id=$2))
-          ON CONFLICT (user_id, program_id) DO UPDATE SET is_active=true, expires_at=EXCLUDED.expires_at`,
-          [user_id, pid]
-        );
-
-        await query('UPDATE programs SET student_count=student_count+1 WHERE id=$1', [pid]);
-      }
-
-      // Set user as premium after first purchase
-      await query(`UPDATE users SET plan='premium' WHERE id=$1 AND plan NOT IN ('premium','vip')`, [user_id]);
-
-      const points = Math.floor(amount / 10000);
-      await query('UPDATE users SET reward_points=reward_points+$1 WHERE id=$2', [points, user_id]);
-
-      // Notify user
-      const progNames = await query(
-        `SELECT name FROM programs WHERE id = ANY($1::uuid[])`,
-        [programIds]
-      );
-      const names = progNames.rows.map(r => r.name).join(', ');
-      await query(`
-        INSERT INTO notifications (user_id, title, message, type)
-        VALUES ($1,$2,$3,'success')`,
-        [user_id, 'Pembayaran Berhasil! ✅',
-         names ? `Program ${names} sudah aktif. Mulai belajar sekarang!` : 'Pembayaran berhasil.']
-      );
-
-      // Send receipt email
-      try {
-        const userRes = await query('SELECT name, email FROM users WHERE id=$1', [user_id]);
-        const user = userRes.rows[0];
-        if (user?.email) {
-          const progPrices = await query('SELECT id, name, price, duration_months FROM programs WHERE id = ANY($1::uuid[])', [programIds]);
-          const paidAt = new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-          await sendReceiptEmail({
-            name: user.name,
-            email: user.email,
-            orderId,
-            programs: progPrices.rows,
-            amount,
-            serviceFee: service_fee || 0,
-            discount: discount || 0,
-            total: gross_amount || amount,
-            paidAt,
-            paymentMethod: payment_type,
-          });
-        }
-      } catch (emailErr) {
-        console.error('Gagal kirim email receipt:', emailErr.message);
-      }
+      await handlePaymentSuccess(orderId, { user_id, program_id, amount, items: txItems, service_fee, discount, gross_amount });
     }
 
     res.json({ status: 'ok' });
@@ -353,6 +351,50 @@ router.get('/history', authenticate, async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: 'Gagal mengambil riwayat pembayaran' });
+  }
+});
+
+// POST /api/payment/sync/:orderId — called by frontend after Snap onSuccess
+router.post('/sync/:orderId', authenticate, async (req, res) => {
+  try {
+    const tx = await query(
+      `SELECT * FROM transactions WHERE order_id=$1 AND user_id=$2`,
+      [req.params.orderId, req.user.id]
+    );
+    if (!tx.rows.length) return res.status(404).json({ error: 'Transaksi tidak ditemukan' });
+
+    const transaction = tx.rows[0];
+    if (transaction.status !== 'pending') return res.json({ status: transaction.status });
+
+    // Verify with Midtrans
+    try {
+      const statusRes = await coreApi.transaction.status(req.params.orderId);
+      const { transaction_status, fraud_status } = statusRes;
+      let newStatus = 'pending';
+      if (transaction_status === 'capture') {
+        newStatus = fraud_status === 'accept' ? 'success' : 'failed';
+      } else if (transaction_status === 'settlement') {
+        newStatus = 'success';
+      } else if (['cancel', 'deny', 'expire'].includes(transaction_status)) {
+        newStatus = transaction_status === 'expire' ? 'expire' : 'failed';
+      }
+
+      await query(
+        `UPDATE transactions SET status=$1 WHERE order_id=$2 AND status='pending'`,
+        [newStatus, req.params.orderId]
+      );
+
+      if (newStatus === 'success') {
+        await handlePaymentSuccess(req.params.orderId);
+      }
+
+      return res.json({ status: newStatus });
+    } catch (e) {
+      return res.json({ status: 'pending', note: 'Midtrans unreachable, webhook pending' });
+    }
+  } catch (err) {
+    console.error('Sync error:', err);
+    res.status(500).json({ error: 'Gagal sync status' });
   }
 });
 
