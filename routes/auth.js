@@ -479,14 +479,24 @@ router.post('/reset-password', async (req, res) => {
    GOOGLE SSO
 ══════════════════════════════════════════════════════════════════ */
 
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+let googleClient;
+function getGoogleClient() {
+  if (!googleClient) {
+    if (!process.env.GOOGLE_CLIENT_ID) return null;
+    googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+  }
+  return googleClient;
+}
 
 router.post('/google', async (req, res) => {
   try {
     const { credential } = req.body;
     if (!credential) return res.status(400).json({ error: 'Credential tidak ditemukan' });
 
-    const ticket = await googleClient.verifyIdToken({
+    const client = getGoogleClient();
+    if (!client) return res.status(503).json({ error: 'Google Login tidak dikonfigurasi' });
+
+    const ticket = await client.verifyIdToken({
       idToken: credential,
       audience: process.env.GOOGLE_CLIENT_ID,
     });
