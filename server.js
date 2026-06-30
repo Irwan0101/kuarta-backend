@@ -27,6 +27,7 @@ import settingsRoutes from './routes/settings.js';
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
@@ -55,8 +56,8 @@ app.use(cors({
 
 app.use(morgan('short'));
 
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Terlalu banyak percobaan login. Coba lagi nanti.' } });
-const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { error: 'Terlalu banyak permintaan OTP. Coba lagi nanti.' } });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { error: 'Terlalu banyak percobaan login. Coba lagi nanti.' }, validate: { xForwardedForHeader: false } });
+const otpLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { error: 'Terlalu banyak permintaan OTP. Coba lagi nanti.' }, validate: { xForwardedForHeader: false } });
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', rateLimit({ windowMs: 60 * 60 * 1000, max: 5 }));
 app.use('/api/auth/forgot-password', otpLimiter);
