@@ -555,6 +555,25 @@ const migrations = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_visits_created ON tracked_visits(created_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_visits_page ON tracked_visits(page)`,
+
+  // ─── QUESTION GROUPS ──────────────────────────────────────────
+  `CREATE TABLE IF NOT EXISTS question_groups (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title         VARCHAR(200) NOT NULL,
+    description   TEXT,
+    stimulus      TEXT,
+    created_at    TIMESTAMPTZ DEFAULT NOW()
+  )`,
+
+  `DO $$ BEGIN
+    ALTER TABLE questions ADD COLUMN IF NOT EXISTS group_id UUID REFERENCES question_groups(id) ON DELETE SET NULL;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `DO $$ BEGIN
+    ALTER TABLE questions ADD COLUMN IF NOT EXISTS time_limit_secs INT;
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
+
+  `CREATE INDEX IF NOT EXISTS idx_questions_group ON questions(group_id)`,
 ];
 
 async function migrate() {

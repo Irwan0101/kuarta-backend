@@ -459,16 +459,19 @@ router.post('/tryouts/:id/questions', async (req, res) => {
     const {
       question_text, option_a, option_b, option_c, option_d, option_e,
       correct_answer, explanation, category, difficulty,
-      order_index, score_value = 5
+      order_index, score_value = 5,
+      group_id, time_limit_secs
     } = req.body;
     const result = await query(`
       INSERT INTO questions
         (tryout_id, question_text, option_a, option_b, option_c, option_d, option_e,
-         correct_answer, explanation, category, difficulty, order_index, score_value)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         correct_answer, explanation, category, difficulty, order_index, score_value,
+         group_id, time_limit_secs)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
       RETURNING *`,
       [req.params.id, question_text, option_a, option_b, option_c, option_d, option_e,
-       correct_answer, explanation, category, difficulty || 'medium', order_index || 0, score_value]
+       correct_answer, explanation, category, difficulty || 'medium', order_index || 0, score_value,
+       group_id || null, time_limit_secs || null]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
@@ -481,7 +484,8 @@ router.put('/questions/:id', async (req, res) => {
   try {
     const {
       question_text, option_a, option_b, option_c, option_d, option_e,
-      correct_answer, explanation, category, difficulty, order_index, score_value
+      correct_answer, explanation, category, difficulty, order_index, score_value,
+      group_id, time_limit_secs
     } = req.body;
     const result = await query(`
       UPDATE questions SET
@@ -496,11 +500,14 @@ router.put('/questions/:id', async (req, res) => {
         category       = COALESCE($9,  category),
         difficulty     = COALESCE($10, difficulty),
         order_index    = COALESCE($11, order_index),
-        score_value    = COALESCE($12, score_value)
-      WHERE id = $13
+        score_value    = COALESCE($12, score_value),
+        group_id       = COALESCE($13, group_id),
+        time_limit_secs = COALESCE($14, time_limit_secs)
+      WHERE id = $15
       RETURNING *`,
       [question_text, option_a, option_b, option_c, option_d, option_e,
-       correct_answer, explanation, category, difficulty, order_index, score_value, req.params.id]
+       correct_answer, explanation, category, difficulty, order_index, score_value,
+       group_id || null, time_limit_secs || null, req.params.id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Soal tidak ditemukan' });
     res.json(result.rows[0]);
@@ -553,10 +560,12 @@ router.get('/questions', async (req, res) => {
     const total = parseInt(countResult.rows[0].count);
 
     const result = await query(`
-      SELECT q.*, tp.title as tryout_title, p.name as program_name
+      SELECT q.*, tp.title as tryout_title, p.name as program_name,
+        qg.title as group_title
       FROM questions q
       LEFT JOIN tryout_packages tp ON tp.id = q.tryout_id
       LEFT JOIN programs p ON p.id = tp.program_id
+      LEFT JOIN question_groups qg ON qg.id = q.group_id
       ${where}
       ORDER BY q.created_at DESC
       LIMIT $${idx++} OFFSET $${idx++}`,
@@ -716,6 +725,63 @@ router.get('/tryouts/:id/question-links', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Gagal memuat soal' });
+  }
+});
+
+/* ── Question Groups ── */
+
+router.get('/question-groups', async (req, res) => {
+  try {
+    const result = await query(`
+      SELECT qg.*, COUNT(q.id) as question_count
+      FROM question_groups qg
+      LEFT JOIN questions q ON q.group_id = qg.id
+      GROUP BY qg.id
+      ORDER BY qg.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal mengambil kelompok soal' });
+  }
+});
+
+router.post('/question-groups', async (req, res) => {
+  try {
+    const { title, description, stimulus } = req.body;
+    const result = await query(
+      `INSERT INTO question_groups (title, description, stimulus) VALUES ($1,$2,$3) RETURNING *`,
+      [title, description || null, stimulus || null]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal membuat kelompok soal' });
+  }
+});
+
+router.put('/question-groups/:id', async (req, res) => {
+  try {
+    const { title, description, stimulus } = req.body;
+    const result = await query(`
+      UPDATE question_groups SET
+        title=COALESCE($1,title), description=COALESCE($2,description),
+        stimulus=COALESCE($3,stimulus) WHERE id=$4 RETURNING *`,
+      [title, description, stimulus, req.params.id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: 'Kelompok tidak ditemukan' });
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal memperbarui kelompok soal' });
+  }
+});
+
+router.delete('/question-groups/:id', async (req, res) => {
+  try {
+    await query('UPDATE questions SET group_id=NULL WHERE group_id=$1', [req.params.id]);
+    const result = await query('DELETE FROM question_groups WHERE id=$1 RETURNING id', [req.params.id]);
+    if (!result.rows.length) return res.status(404).json({ error: 'Kelompok tidak ditemukan' });
+    res.json({ deleted: result.rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: 'Gagal menghapus kelompok soal' });
   }
 });
 
