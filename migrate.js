@@ -574,6 +574,11 @@ const migrations = [
   EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
 
   `CREATE INDEX IF NOT EXISTS idx_questions_group ON questions(group_id)`,
+
+  // ─── TRYOUT difficulty column ─────────────────────────────────
+  `DO $$ BEGIN
+    ALTER TABLE tryout_packages ADD COLUMN IF NOT EXISTS difficulty VARCHAR(20) DEFAULT 'medium';
+  EXCEPTION WHEN duplicate_column THEN NULL; END $$`,
 ];
 
 async function migrate() {

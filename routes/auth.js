@@ -101,7 +101,7 @@ const genTokens = (userId, tokenVersion = 0) => ({
 // POST /api/auth/register
 router.post('/register', validate(schemas.register), async (req, res) => {
   try {
-    const { name, email, password, phone } = req.body;
+    const { name, email, password, phone, city } = req.body;
 
     const existing = await query('SELECT id FROM users WHERE email=$1', [email.toLowerCase()]);
     if (existing.rows.length) {

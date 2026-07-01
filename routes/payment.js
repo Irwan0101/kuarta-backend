@@ -160,9 +160,7 @@ router.post('/create', authenticate, validate(schemas.paymentInit), async (req, 
     const discountedAmount = Math.max(0, totalAmount - discount);
     const grossAmount = discountedAmount + serviceFee;
 
-    if (discount > 0) {
-      midtransItems.push({ id: 'DISCOUNT', price: -discount, quantity: 1, name: 'Diskon Kupon' });
-    }
+
     midtransItems.push({ id: 'SERVICE-FEE', price: serviceFee, quantity: 1, name: 'Biaya Layanan' });
 
     const snapParam = {
@@ -228,13 +226,19 @@ async function handlePaymentSuccess(orderId, { user_id, program_id, amount, item
   }
 
   for (const pid of programIds) {
+    const existing = await query(
+      'SELECT id FROM user_programs WHERE user_id=$1 AND program_id=$2',
+      [user_id, pid]
+    );
     await query(`
       INSERT INTO user_programs (user_id, program_id, expires_at)
       VALUES ($1,$2,NOW()+INTERVAL '1 month' * (SELECT duration_months FROM programs WHERE id=$2))
       ON CONFLICT (user_id, program_id) DO UPDATE SET is_active=true, expires_at=EXCLUDED.expires_at`,
       [user_id, pid]
     );
-    await query('UPDATE programs SET student_count=student_count+1 WHERE id=$1', [pid]);
+    if (!existing.rows.length) {
+      await query('UPDATE programs SET student_count=student_count+1 WHERE id=$1', [pid]);
+    }
   }
 
   const progCount = await query(
