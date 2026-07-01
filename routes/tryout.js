@@ -67,7 +67,7 @@ router.get('/:id/questions', authenticate, async (req, res) => {
 
     const result = await query(`
       SELECT q.id, q.category, q.question_text, q.option_a, q.option_b, q.option_c, q.option_d, q.option_e,
-             q.order_index, q.score_value ${groupSelect}
+             q.order_index, q.score_value, q.correct_answer, q.explanation ${groupSelect}
       FROM questions q
       LEFT JOIN tryout_questions tq ON tq.question_id = q.id
       ${groupJoin}
