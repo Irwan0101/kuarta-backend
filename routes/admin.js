@@ -584,8 +584,8 @@ router.get('/questions', async (req, res) => {
 
     res.json({ questions: result.rows, total, page: Number(page), limit: Number(limit) });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Gagal mengambil soal' });
+    console.error('Admin questions error:', err.message, err.stack?.slice(0, 300));
+    res.status(500).json({ error: err.message || 'Gagal mengambil soal' });
   }
 });
 
