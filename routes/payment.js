@@ -237,7 +237,16 @@ async function handlePaymentSuccess(orderId, { user_id, program_id, amount, item
     await query('UPDATE programs SET student_count=student_count+1 WHERE id=$1', [pid]);
   }
 
-  await query(`UPDATE users SET plan='premium' WHERE id=$1 AND plan NOT IN ('premium','vip')`, [user_id]);
+  const progCount = await query(
+    `SELECT COUNT(*) as cnt FROM user_programs WHERE user_id=$1 AND is_active=true`,
+    [user_id]
+  );
+  const totalProgs = parseInt(progCount.rows[0].cnt);
+  if (totalProgs >= 3) {
+    await query(`UPDATE users SET plan='vip' WHERE id=$1`, [user_id]);
+  } else {
+    await query(`UPDATE users SET plan='premium' WHERE id=$1 AND plan NOT IN ('premium','vip')`, [user_id]);
+  }
   const points = Math.floor((amount || 0) / 10000);
   await query('UPDATE users SET reward_points=reward_points+$1 WHERE id=$2', [points, user_id]);
 
