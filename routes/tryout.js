@@ -14,6 +14,7 @@ router.get('/', authenticate, async (req, res) => {
         tr.total_score as my_score, tr.passed as my_passed,
         tr.id as my_result_id
       FROM tryout_packages tp
+      JOIN user_programs up ON up.program_id = tp.program_id AND up.user_id=$1 AND up.is_active=true
       LEFT JOIN LATERAL (
         SELECT user_id, total_score, passed, id
         FROM tryout_results
